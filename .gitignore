@@ -200,6 +200,9 @@ Dockerfile
 data/
 clipsai/data
 test_files/
+input/
+output/
+plans/
 
 # Ignore macOS system files
 .DS_Store
