@@ -50,6 +50,11 @@ setup(
         "Issues": "https://github.com/ClipsAI/clipsai/issues",
     },
     include_package_data=True,
+    entry_points={
+        "console_scripts": [
+            "clipsai-reframe=clipsai.reframe:main",
+        ],
+    },
     extras_require={
         "dev": [
             "black",

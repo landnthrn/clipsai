@@ -65,3 +65,29 @@ crops = resize(
 
 print("Crops: ", crops.segments)
 ```
+
+### Simple analyze/render workflow
+
+For a cleaner file-or-folder workflow, this fork also includes a small command flow for:
+
+1. analyzing one file or a folder of videos into editable JSON plans
+2. optionally editing those plans
+3. rendering final vertical outputs from the saved plans
+
+Analyze only:
+
+```bash
+clipsai-reframe analyze --input "/abs/path/to/videos" --plans-dir "plans"
+```
+
+Render only:
+
+```bash
+clipsai-reframe render --input "plans" --output-dir "output"
+```
+
+One-shot run:
+
+```bash
+clipsai-reframe run --input "/abs/path/to/videos" --plans-dir "plans" --output-dir "output"
+```
