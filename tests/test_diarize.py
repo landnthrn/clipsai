@@ -1,13 +1,36 @@
 # standard library imports
 from unittest.mock import patch, Mock
+from types import ModuleType
 
 # local package imports
 from clipsai.diarize.pyannote import PyannoteDiarizer
+from clipsai.diarize.pyannote import _patch_speechbrain_lazy_modules
 
 # third party imports
 import pandas as pd
 from pyannote.core import Segment, Annotation
 import pytest
+
+
+def test_patch_speechbrain_lazy_modules_adds_file_only_to_lazy_redirects():
+    LazyLike = type("LazyLike", (ModuleType,), {"__module__": "speechbrain.utils.importutils"})
+    lazy_module = LazyLike("speechbrain.k2_integration")
+    normal_module = ModuleType("plain.module")
+    already_patched_module = LazyLike("speechbrain.pretrained")
+    already_patched_module.__file__ = "already-set"
+
+    module_map = {
+        "speechbrain.k2_integration": lazy_module,
+        "plain.module": normal_module,
+        "speechbrain.pretrained": already_patched_module,
+    }
+
+    patched = _patch_speechbrain_lazy_modules(module_map)
+
+    assert patched == 1
+    assert lazy_module.__file__ == "<lazy>"
+    assert "__file__" not in normal_module.__dict__
+    assert already_patched_module.__file__ == "already-set"
 
 
 @pytest.fixture

@@ -17,6 +17,7 @@ use that as the number of speakers to detect.
 # standard library imports
 import logging
 import os
+import sys
 import uuid
 
 # local package imports
@@ -27,6 +28,41 @@ from clipsai.utils.pytorch import get_compute_device, assert_compute_device_avai
 from pyannote.audio import Pipeline
 from pyannote.core.annotation import Annotation
 import torch
+
+
+def _patch_speechbrain_lazy_modules(module_map: dict | None = None) -> int:
+    """
+    Give SpeechBrain lazy redirect modules a harmless ``__file__`` value.
+
+    Some newer SpeechBrain lazy modules trigger optional imports like ``k2`` when
+    Python's inspect helpers ask whether the module has a ``__file__`` attribute.
+    PyTorch Lightning calls into inspect while Pyannote is loading checkpoints,
+    which can crash diarization even though k2 is unrelated to this workflow.
+    """
+    if module_map is None:
+        try:
+            import speechbrain  # noqa: F401
+        except ImportError:
+            return 0
+        module_map = sys.modules
+
+    patched = 0
+    for module in list(module_map.values()):
+        if module is None:
+            continue
+
+        module_type = type(module)
+        if getattr(module_type, "__module__", "") != "speechbrain.utils.importutils":
+            continue
+
+        module_dict = getattr(module, "__dict__", None)
+        if module_dict is None or "__file__" in module_dict:
+            continue
+
+        module.__file__ = "<lazy>"
+        patched += 1
+
+    return patched
 
 
 class PyannoteDiarizer:
@@ -53,6 +89,7 @@ class PyannoteDiarizer:
         if device is None:
             device = get_compute_device()
         assert_compute_device_available(device)
+        _patch_speechbrain_lazy_modules()
 
         self.pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
