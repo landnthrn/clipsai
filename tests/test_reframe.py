@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from clipsai.reframe import PLAN_FILE_SUFFIX
 from clipsai.reframe import build_plan
+from clipsai.reframe import build_render_media_file
 from clipsai.reframe import default_output_path
 from clipsai.reframe import default_plan_path
 from clipsai.reframe import discover_plan_files
@@ -70,3 +73,109 @@ def test_default_paths(tmp_path: Path):
 
     assert plan_path.name == f"episode01{PLAN_FILE_SUFFIX}"
     assert output_path.name == "episode01_vertical.mp4"
+
+
+def test_build_render_media_file_uses_audiovideo_for_sources_with_audio(tmp_path: Path):
+    source_path = tmp_path / "episode01.mp4"
+    source_path.write_text("x", encoding="utf-8")
+
+    class FakeTemporalMediaFile:
+        def __init__(self, path: str):
+            self.path = path
+
+        def assert_exists(self) -> None:
+            return None
+
+        def has_video_stream(self) -> bool:
+            return True
+
+        def has_audio_stream(self) -> bool:
+            return True
+
+    class FakeVideoFile:
+        def __init__(self, path: str):
+            self.path = path
+
+    class FakeAudioVideoFile:
+        def __init__(self, path: str):
+            self.path = path
+
+    media_file = build_render_media_file(
+        source_path,
+        temporal_media_cls=FakeTemporalMediaFile,
+        video_file_cls=FakeVideoFile,
+        audiovideo_file_cls=FakeAudioVideoFile,
+    )
+
+    assert isinstance(media_file, FakeAudioVideoFile)
+    assert media_file.path == str(source_path)
+
+
+def test_build_render_media_file_uses_video_file_for_video_only_sources(tmp_path: Path):
+    source_path = tmp_path / "episode01.mp4"
+    source_path.write_text("x", encoding="utf-8")
+
+    class FakeTemporalMediaFile:
+        def __init__(self, path: str):
+            self.path = path
+
+        def assert_exists(self) -> None:
+            return None
+
+        def has_video_stream(self) -> bool:
+            return True
+
+        def has_audio_stream(self) -> bool:
+            return False
+
+    class FakeVideoFile:
+        def __init__(self, path: str):
+            self.path = path
+
+    class FakeAudioVideoFile:
+        def __init__(self, path: str):
+            self.path = path
+
+    media_file = build_render_media_file(
+        source_path,
+        temporal_media_cls=FakeTemporalMediaFile,
+        video_file_cls=FakeVideoFile,
+        audiovideo_file_cls=FakeAudioVideoFile,
+    )
+
+    assert isinstance(media_file, FakeVideoFile)
+    assert media_file.path == str(source_path)
+
+
+def test_build_render_media_file_rejects_sources_without_video(tmp_path: Path):
+    source_path = tmp_path / "episode01.mp4"
+    source_path.write_text("x", encoding="utf-8")
+
+    class FakeTemporalMediaFile:
+        def __init__(self, path: str):
+            self.path = path
+
+        def assert_exists(self) -> None:
+            return None
+
+        def has_video_stream(self) -> bool:
+            return False
+
+        def has_audio_stream(self) -> bool:
+            return True
+
+    class FakeVideoFile:
+        def __init__(self, path: str):
+            self.path = path
+
+    class FakeAudioVideoFile:
+        def __init__(self, path: str):
+            self.path = path
+
+    with pytest.raises(ValueError, match="does not contain a video stream"):
+        build_render_media_file(
+            source_path,
+            temporal_media_cls=FakeTemporalMediaFile,
+            video_file_cls=FakeVideoFile,
+            audiovideo_file_cls=FakeAudioVideoFile,
+        )

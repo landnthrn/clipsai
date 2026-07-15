@@ -268,12 +268,41 @@ def clamp_crop_value(value: int, maximum: int) -> int:
     return max(0, min(int(value), max(0, int(maximum))))
 
 
+def build_render_media_file(
+    source_path: Path,
+    temporal_media_cls=None,
+    video_file_cls=None,
+    audiovideo_file_cls=None,
+):
+    """
+    Open a render source as either a video-only file or an audio-video file.
+    """
+    if (
+        temporal_media_cls is None
+        or video_file_cls is None
+        or audiovideo_file_cls is None
+    ):
+        from clipsai.media.audiovideo_file import AudioVideoFile
+        from clipsai.media.temporal_media_file import TemporalMediaFile
+        from clipsai.media.video_file import VideoFile
+
+        temporal_media_cls = temporal_media_cls or TemporalMediaFile
+        video_file_cls = video_file_cls or VideoFile
+        audiovideo_file_cls = audiovideo_file_cls or AudioVideoFile
+
+    media_file = temporal_media_cls(str(source_path))
+    media_file.assert_exists()
+    if media_file.has_video_stream() is False:
+        raise ValueError(f"Source file does not contain a video stream: {source_path}")
+    if media_file.has_audio_stream():
+        return audiovideo_file_cls(str(source_path))
+    return video_file_cls(str(source_path))
+
+
 def render_plan(plan_path: Path, output_dir: Path) -> Path:
     """
     Render one plan JSON file into a vertical video file.
     """
-    from clipsai.media.video_file import VideoFile
-
     plan_data = load_plan(plan_path)
     source_path = Path(plan_data["source_path"]).expanduser().resolve()
     if not source_path.exists():
@@ -289,7 +318,7 @@ def render_plan(plan_path: Path, output_dir: Path) -> Path:
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    video = VideoFile(str(source_path))
+    video = build_render_media_file(source_path)
     max_x = video.get_width_pixels() - crops.crop_width
     max_y = video.get_height_pixels() - crops.crop_height
 
