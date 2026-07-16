@@ -67,13 +67,14 @@ def test_build_plan_contains_expected_shape(tmp_path: Path):
     )
 
     assert plan["plan_version"] == PLAN_VERSION
+    assert "_editing_help" in plan
     assert plan["source_filename"] == "podcast.mp4"
     assert plan["analysis"]["crop_width"] == 608
     assert plan["render"]["mode"] == "preset"
     assert plan["render"]["preset_name"] == "high"
     assert plan["render"]["output_name_mode"] == "suffix"
     assert plan["render"]["output_suffix"] == "_vertical"
-    assert plan["render"]["output_name"] == "podcast_vertical.mp4"
+    assert "output_name" not in plan["render"]
     assert plan["segments"][0]["segment_id"] == "segment_0001"
     assert plan["segments"][0]["enabled"] is True
     assert plan["segments"][0]["speakers"] == [0]
@@ -126,11 +127,11 @@ def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
     normalized = normalize_plan_data(legacy_plan)
 
     assert normalized["plan_version"] == PLAN_VERSION
+    assert "_editing_help" in normalized
     assert normalized["source_filename"] == "episode01.mp4"
     assert normalized["render"]["mode"] == "preset"
     assert normalized["render"]["output_name_mode"] == "suffix"
     assert normalized["render"]["output_suffix"] == "_vertical"
-    assert normalized["render"]["output_name"] == "episode01_vertical.mp4"
     assert normalized["render"]["overwrite"] is True
     assert normalized["segments"][0]["segment_id"] == "segment_0001"
     assert normalized["segments"][0]["enabled"] is True
@@ -167,7 +168,6 @@ def test_normalize_plan_data_infers_keep_original_output_mode(tmp_path: Path):
 
     assert normalized["render"]["output_name_mode"] == "keep_original"
     assert normalized["render"]["output_suffix"] == ""
-    assert normalized["render"]["output_name"] == "episode01.mp4"
 
 
 def test_resolve_output_filename_supports_suffix_and_keep_original(tmp_path: Path):
@@ -252,7 +252,6 @@ def test_resolve_render_settings_uses_cli_preset_override(tmp_path: Path):
             "preset_name": "high",
             "output_name_mode": "suffix",
             "output_suffix": "_vertical",
-            "output_name": "episode01_vertical.mp4",
             "output_width": 1080,
             "output_height": 1920,
             "overwrite": True,
@@ -288,7 +287,6 @@ def test_resolve_render_settings_supports_custom_mode(tmp_path: Path):
             "preset_name": "manual",
             "output_name_mode": "suffix",
             "output_suffix": "_manual-test",
-            "output_name": "manual.mp4",
             "output_width": 1080,
             "output_height": 1920,
             "overwrite": True,

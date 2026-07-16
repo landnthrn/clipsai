@@ -222,9 +222,45 @@ def build_render_plan_entry(
         "overwrite": True,
         **RENDER_PRESETS[render_preset],
     }
-    render_data["output_name"] = resolve_output_filename(video_path, render_data)
     return {
         **render_data,
+    }
+
+
+def build_plan_editing_help() -> dict:
+    """
+    Return ignored guidance fields that make plan editing easier by hand.
+    """
+    return {
+        "summary": (
+            "Fields that start with '_' are ignored by the renderer and are only "
+            "here as editing help."
+        ),
+        "plan_version": "Internal plan format version. Leave this value alone.",
+        "render": {
+            "mode": (
+                "preset = use preset_name. custom = use the advanced codec fields "
+                "below."
+            ),
+            "preset_name": "Named quality preset such as preview, high, fast, or master.",
+            "output_name_mode": (
+                "suffix = source base name plus output_suffix. "
+                "keep_original = keep the source base name."
+            ),
+            "output_suffix": (
+                "Used only when output_name_mode is suffix. "
+                "Examples: _vertical or _social-cut."
+            ),
+            "overwrite": "true = replace same-name output. false = fail instead.",
+        },
+        "segments": {
+            "enabled": "true = render this segment. false = skip it.",
+            "start_time": "Segment start time in seconds.",
+            "end_time": "Segment end time in seconds.",
+            "x": "Horizontal crop position in source pixels.",
+            "y": "Vertical crop position in source pixels.",
+            "notes": "Optional personal note. Ignored by the renderer.",
+        },
     }
 
 
@@ -245,6 +281,7 @@ def build_plan(
     video_path = Path(video_path).resolve()
     return {
         "plan_version": PLAN_VERSION,
+        "_editing_help": build_plan_editing_help(),
         "source_path": str(video_path),
         "source_filename": video_path.name,
         "analysis": {
@@ -305,12 +342,12 @@ def normalize_plan_data(plan_data: dict) -> dict:
     render_data.setdefault("output_width", DEFAULT_OUTPUT_WIDTH)
     render_data.setdefault("output_height", DEFAULT_OUTPUT_HEIGHT)
     render_data.setdefault("overwrite", True)
-    render_data["output_name"] = resolve_output_filename(source_path, render_data)
 
     normalized_plan["plan_version"] = max(
         int(normalized_plan.get("plan_version", 1)),
         PLAN_VERSION,
     )
+    normalized_plan.setdefault("_editing_help", build_plan_editing_help())
     normalized_plan["source_path"] = str(source_path)
     normalized_plan.setdefault("source_filename", source_path.name)
     normalized_plan["render"] = render_data

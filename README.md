@@ -76,6 +76,7 @@ For a cleaner file-or-folder workflow, this fork also includes a small command f
 
 Each plan now stores:
 
+- ignored `_editing_help` guidance so the file explains itself better by hand
 - segment IDs for easier manual reference
 - an `enabled` switch per segment so you can skip sections without deleting them
 - a `notes` field per segment
@@ -136,9 +137,11 @@ Example render naming fields:
 
 ```json
 {
+  "_editing_help": {
+    "summary": "Fields that start with '_' are ignored by the renderer."
+  },
   "output_name_mode": "suffix",
   "output_suffix": "_vertical",
-  "output_name": "podcast_vertical.mp4",
   "overwrite": true
 }
 ```
