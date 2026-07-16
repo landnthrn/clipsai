@@ -6,7 +6,9 @@ from clipsai.reframe import PLAN_FILE_SUFFIX
 from clipsai.reframe import PLAN_VERSION
 from clipsai.reframe import build_plan
 from clipsai.reframe import build_render_media_file
+from clipsai.reframe import build_render_summary_markdown
 from clipsai.reframe import create_crops_from_plan
+from clipsai.reframe import default_summary_path
 from clipsai.reframe import default_output_path
 from clipsai.reframe import default_plan_path
 from clipsai.reframe import discover_plan_files
@@ -74,6 +76,7 @@ def test_build_plan_contains_expected_shape(tmp_path: Path):
     assert plan["render"]["preset_name"] == "high"
     assert plan["render"]["output_name_mode"] == "suffix"
     assert plan["render"]["output_suffix"] == "_vertical"
+    assert plan["render"]["export_summary_markdown"] is False
     assert "output_name" not in plan["render"]
     assert plan["segments"][0]["segment_id"] == "segment_0001"
     assert plan["segments"][0]["enabled"] is True
@@ -86,9 +89,11 @@ def test_default_paths(tmp_path: Path):
     source_path = tmp_path / "episode01.mp4"
     plan_path = default_plan_path(source_path, tmp_path / "plans")
     output_path = default_output_path(source_path, tmp_path / "output")
+    summary_path = default_summary_path(output_path)
 
     assert plan_path.name == f"episode01{PLAN_FILE_SUFFIX}"
     assert output_path.name == "episode01_vertical.mp4"
+    assert summary_path.name == "episode01_vertical_summary.md"
 
 
 def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
@@ -106,6 +111,7 @@ def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
             "preset_name": "high",
             "output_width": 1080,
             "output_height": 1920,
+            "export_summary_markdown": True,
             "video_codec": "libx264",
             "audio_codec": "aac",
             "audio_bitrate": "320k",
@@ -133,6 +139,7 @@ def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
     assert normalized["render"]["output_name_mode"] == "suffix"
     assert normalized["render"]["output_suffix"] == "_vertical"
     assert normalized["render"]["overwrite"] is True
+    assert normalized["render"]["export_summary_markdown"] is True
     assert normalized["segments"][0]["segment_id"] == "segment_0001"
     assert normalized["segments"][0]["enabled"] is True
     assert normalized["segments"][0]["notes"] == ""
@@ -255,6 +262,7 @@ def test_resolve_render_settings_uses_cli_preset_override(tmp_path: Path):
             "output_width": 1080,
             "output_height": 1920,
             "overwrite": True,
+            "export_summary_markdown": True,
         },
     }
 
@@ -273,6 +281,7 @@ def test_resolve_render_settings_uses_cli_preset_override(tmp_path: Path):
     assert render_settings["output_width"] == 720
     assert render_settings["output_height"] == 1280
     assert render_settings["overwrite"] is False
+    assert render_settings["export_summary_markdown"] is True
     assert render_settings["output_name_mode"] == "suffix"
     assert render_settings["output_suffix"] == "_vertical"
     assert render_settings["output_name"] == "episode01_vertical.mp4"
@@ -290,6 +299,7 @@ def test_resolve_render_settings_supports_custom_mode(tmp_path: Path):
             "output_width": 1080,
             "output_height": 1920,
             "overwrite": True,
+            "export_summary_markdown": False,
             "video_codec": "libx264",
             "audio_codec": "aac",
             "audio_bitrate": "256k",
@@ -306,6 +316,49 @@ def test_resolve_render_settings_supports_custom_mode(tmp_path: Path):
     assert render_settings["audio_bitrate"] == "256k"
     assert render_settings["crf"] == "16"
     assert render_settings["output_name"] == "episode01_manual-test.mp4"
+
+
+def test_build_render_summary_markdown_contains_core_details(tmp_path: Path):
+    plan_path = tmp_path / f"episode01{PLAN_FILE_SUFFIX}"
+    source_path = tmp_path / "episode01.mp4"
+    output_path = tmp_path / "episode01_vertical.mp4"
+    summary_path = tmp_path / "episode01_vertical_summary.md"
+    render_settings = {
+        "mode": "preset",
+        "preset_name": "preview",
+        "output_name_mode": "suffix",
+        "output_suffix": "_vertical",
+        "output_width": 1080,
+        "output_height": 1920,
+        "overwrite": True,
+        "video_codec": "libx264",
+        "audio_codec": "aac",
+        "audio_bitrate": "160k",
+        "scale_flags": "lanczos",
+    }
+    enabled_segments = [
+        {"segment_id": "segment_0001", "start_time": 0.0, "end_time": 5.5},
+        {"segment_id": "segment_0002", "start_time": 5.5, "end_time": 12.0},
+    ]
+    disabled_segments = [{"segment_id": "segment_0003"}]
+
+    summary_markdown = build_render_summary_markdown(
+        generated_at="07/16/2026 02:30 AM",
+        plan_path=plan_path,
+        source_path=source_path,
+        output_path=output_path,
+        summary_path=summary_path,
+        render_settings=render_settings,
+        enabled_segments=enabled_segments,
+        disabled_segments=disabled_segments,
+    )
+
+    assert "# Render Summary" in summary_markdown
+    assert "Created: 07/16/2026 02:30 AM" in summary_markdown
+    assert "Rendered output" in summary_markdown
+    assert "Output size: `1080x1920`" in summary_markdown
+    assert "Enabled segments rendered: `2`" in summary_markdown
+    assert "Disabled segment IDs: `segment_0003`" in summary_markdown
 
 
 def test_build_render_media_file_uses_audiovideo_for_sources_with_audio(tmp_path: Path):

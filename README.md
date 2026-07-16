@@ -80,7 +80,7 @@ Each plan now stores:
 - segment IDs for easier manual reference
 - an `enabled` switch per segment so you can skip sections without deleting them
 - a `notes` field per segment
-- render settings such as preset/custom mode, naming mode, suffix, size, and overwrite behavior
+- render settings such as preset/custom mode, naming mode, suffix, size, overwrite behavior, and optional markdown summary export
 
 Analyze only:
 
@@ -142,6 +142,16 @@ Example render naming fields:
   },
   "output_name_mode": "suffix",
   "output_suffix": "_vertical",
+  "export_summary_markdown": false,
   "overwrite": true
 }
 ```
+
+If `export_summary_markdown` is set to `true`, render also writes a markdown summary next to the video output with:
+
+- a created timestamp
+- the plan path
+- the source path
+- the rendered output path
+- the render settings used
+- a short enabled versus disabled segment summary

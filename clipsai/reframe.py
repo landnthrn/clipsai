@@ -4,6 +4,7 @@ Simple analyze/render workflow for speaker-focused vertical reframing.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 import shutil
@@ -220,6 +221,7 @@ def build_render_plan_entry(
         "output_width": output_width,
         "output_height": output_height,
         "overwrite": True,
+        "export_summary_markdown": False,
         **RENDER_PRESETS[render_preset],
     }
     return {
@@ -265,6 +267,7 @@ def build_plan_editing_help() -> dict:
                 "Examples: _vertical or _social-cut."
             ),
             "overwrite": "true = replace same-name output. false = fail instead.",
+            "export_summary_markdown": "true = also export a markdown summary after render. false = skip it.",
             "output_width": "Rendered width in pixels. Usually not meant to be edited unless you want a different export size.",
             "output_height": "Rendered height in pixels. Usually not meant to be edited unless you want a different export size.",
             "video_codec": "Advanced render field. Usually not meant to be edited unless mode is custom.",
@@ -367,6 +370,7 @@ def normalize_plan_data(plan_data: dict) -> dict:
     render_data.setdefault("output_width", DEFAULT_OUTPUT_WIDTH)
     render_data.setdefault("output_height", DEFAULT_OUTPUT_HEIGHT)
     render_data.setdefault("overwrite", True)
+    render_data.setdefault("export_summary_markdown", False)
 
     normalized_plan["plan_version"] = max(
         int(normalized_plan.get("plan_version", 1)),
@@ -474,6 +478,13 @@ def store_plan(plan_path: Path, plan_data: dict) -> Path:
     return plan_path
 
 
+def default_summary_path(output_path: Path) -> Path:
+    """
+    Return the default markdown summary path for a rendered output.
+    """
+    return output_path.with_name(f"{output_path.stem}_summary.md")
+
+
 def load_plan(plan_path: Path) -> dict:
     """
     Read a plan JSON file from disk.
@@ -560,7 +571,87 @@ def resolve_render_settings(
         if overwrite_override is None
         else overwrite_override
     )
+    resolved_settings["export_summary_markdown"] = bool(
+        render_data.get("export_summary_markdown", False)
+    )
     return resolved_settings
+
+
+def build_render_summary_markdown(
+    generated_at: str,
+    plan_path: Path,
+    source_path: Path,
+    output_path: Path,
+    summary_path: Path,
+    render_settings: dict,
+    enabled_segments: list[dict],
+    disabled_segments: list[dict],
+) -> str:
+    """
+    Build a markdown summary of one render run.
+    """
+    lines = [
+        "# Render Summary",
+        "",
+        f"Created: {generated_at}",
+        "",
+        "## Files",
+        "",
+        f"- Plan: `{plan_path}`",
+        f"- Source video: `{source_path}`",
+        f"- Rendered output: `{output_path}`",
+        f"- Summary file: `{summary_path}`",
+        "",
+        "## Render Settings",
+        "",
+        f"- Mode: `{render_settings['mode']}`",
+        f"- Preset: `{render_settings['preset_name']}`",
+        f"- Output naming mode: `{render_settings['output_name_mode']}`",
+        f"- Output suffix: `{render_settings['output_suffix']}`",
+        f"- Output size: `{render_settings['output_width']}x{render_settings['output_height']}`",
+        f"- Overwrite: `{render_settings['overwrite']}`",
+        f"- Video codec: `{render_settings['video_codec']}`",
+        f"- Audio codec: `{render_settings['audio_codec']}`",
+        f"- Audio bitrate: `{render_settings['audio_bitrate']}`",
+        f"- Scale flags: `{render_settings['scale_flags']}`",
+        "",
+        "## Segment Summary",
+        "",
+        f"- Enabled segments rendered: `{len(enabled_segments)}`",
+        f"- Disabled segments skipped: `{len(disabled_segments)}`",
+    ]
+
+    if enabled_segments:
+        first_start_time = min(float(segment["start_time"]) for segment in enabled_segments)
+        last_end_time = max(float(segment["end_time"]) for segment in enabled_segments)
+        lines.append(f"- Rendered timeline: `{first_start_time}` to `{last_end_time}` seconds")
+
+    if disabled_segments:
+        disabled_segment_ids = ", ".join(
+            segment.get("segment_id", "unknown-segment") for segment in disabled_segments
+        )
+        lines.append(f"- Disabled segment IDs: `{disabled_segment_ids}`")
+
+    return "\n".join(lines) + "\n"
+
+
+def write_render_summary(
+    summary_path: Path,
+    summary_markdown: str,
+    overwrite: bool,
+) -> Path:
+    """
+    Write a render summary markdown file.
+    """
+    if summary_path.exists() and overwrite is False:
+        raise FileExistsError(
+            f"Summary file already exists and overwrite is disabled: {summary_path}"
+        )
+
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    with summary_path.open("w", encoding="utf-8") as file_object:
+        file_object.write(summary_markdown)
+    return summary_path
 
 
 def analyze_video(
@@ -680,6 +771,10 @@ def render_plan(
         raise FileNotFoundError(f"Source video from plan does not exist: {source_path}")
 
     crops = create_crops_from_plan(plan_data)
+    enabled_segments = get_enabled_segments(plan_data)
+    disabled_segments = [
+        segment for segment in plan_data["segments"] if segment.get("enabled", True) is False
+    ]
     render_settings = resolve_render_settings(
         plan_data=plan_data,
         render_preset_override=render_preset_override,
@@ -688,10 +783,19 @@ def render_plan(
         overwrite_override=overwrite_override,
     )
     output_path = output_dir / render_settings["output_name"]
+    summary_path = default_summary_path(output_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     if output_path.exists() and render_settings["overwrite"] is False:
         raise FileExistsError(
             f"Output file already exists and overwrite is disabled: {output_path}"
+        )
+    if (
+        render_settings["export_summary_markdown"]
+        and summary_path.exists()
+        and render_settings["overwrite"] is False
+    ):
+        raise FileExistsError(
+            f"Summary file already exists and overwrite is disabled: {summary_path}"
         )
 
     temp_dir = output_dir / f"{source_path.stem}_temp_segments"
@@ -779,6 +883,25 @@ def render_plan(
             str(output_path),
         ]
     )
+
+    if render_settings["export_summary_markdown"]:
+        generated_at = datetime.now().strftime("%m/%d/%Y %I:%M %p")
+        summary_markdown = build_render_summary_markdown(
+            generated_at=generated_at,
+            plan_path=plan_path,
+            source_path=source_path,
+            output_path=output_path,
+            summary_path=summary_path,
+            render_settings=render_settings,
+            enabled_segments=enabled_segments,
+            disabled_segments=disabled_segments,
+        )
+        write_render_summary(
+            summary_path=summary_path,
+            summary_markdown=summary_markdown,
+            overwrite=render_settings["overwrite"],
+        )
+
     shutil.rmtree(temp_dir)
     return output_path
 
