@@ -79,12 +79,24 @@ Each plan now stores:
 - segment IDs for easier manual reference
 - an `enabled` switch per segment so you can skip sections without deleting them
 - a `notes` field per segment
-- render settings such as preset/custom mode, output name, size, and overwrite behavior
+- render settings such as preset/custom mode, naming mode, suffix, size, and overwrite behavior
 
 Analyze only:
 
 ```bash
 clipsai-reframe analyze --input "/abs/path/to/videos" --plans-dir "plans"
+```
+
+Analyze while keeping the original base names for outputs:
+
+```bash
+clipsai-reframe analyze --input "/abs/path/to/videos" --plans-dir "plans" --output-name-mode keep_original
+```
+
+Analyze with a custom suffix:
+
+```bash
+clipsai-reframe analyze --input "/abs/path/to/videos" --plans-dir "plans" --output-name-mode suffix --output-suffix "_social-cut"
 ```
 
 Render only:
@@ -117,5 +129,16 @@ Example plan segment:
   "x": 420,
   "y": 0,
   "notes": ""
+}
+```
+
+Example render naming fields:
+
+```json
+{
+  "output_name_mode": "suffix",
+  "output_suffix": "_vertical",
+  "output_name": "podcast_vertical.mp4",
+  "overwrite": true
 }
 ```

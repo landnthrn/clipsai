@@ -13,6 +13,8 @@ from clipsai.reframe import discover_plan_files
 from clipsai.reframe import discover_video_files
 from clipsai.reframe import get_enabled_segments
 from clipsai.reframe import normalize_plan_data
+from clipsai.reframe import original_output_filename
+from clipsai.reframe import resolve_output_filename
 from clipsai.reframe import resolve_render_settings
 from clipsai.resize.crops import Crops
 from clipsai.resize.segment import Segment
@@ -69,6 +71,8 @@ def test_build_plan_contains_expected_shape(tmp_path: Path):
     assert plan["analysis"]["crop_width"] == 608
     assert plan["render"]["mode"] == "preset"
     assert plan["render"]["preset_name"] == "high"
+    assert plan["render"]["output_name_mode"] == "suffix"
+    assert plan["render"]["output_suffix"] == "_vertical"
     assert plan["render"]["output_name"] == "podcast_vertical.mp4"
     assert plan["segments"][0]["segment_id"] == "segment_0001"
     assert plan["segments"][0]["enabled"] is True
@@ -124,11 +128,62 @@ def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
     assert normalized["plan_version"] == PLAN_VERSION
     assert normalized["source_filename"] == "episode01.mp4"
     assert normalized["render"]["mode"] == "preset"
+    assert normalized["render"]["output_name_mode"] == "suffix"
+    assert normalized["render"]["output_suffix"] == "_vertical"
     assert normalized["render"]["output_name"] == "episode01_vertical.mp4"
     assert normalized["render"]["overwrite"] is True
     assert normalized["segments"][0]["segment_id"] == "segment_0001"
     assert normalized["segments"][0]["enabled"] is True
     assert normalized["segments"][0]["notes"] == ""
+
+
+def test_normalize_plan_data_infers_keep_original_output_mode(tmp_path: Path):
+    source_path = tmp_path / "episode01.mov"
+    legacy_plan = {
+        "plan_version": 1,
+        "source_path": str(source_path),
+        "analysis": {
+            "original_width": 1920,
+            "original_height": 1080,
+            "crop_width": 608,
+            "crop_height": 1080,
+        },
+        "render": {
+            "preset_name": "high",
+            "output_name": "episode01.mp4",
+        },
+        "segments": [
+            {
+                "speakers": [0],
+                "start_time": 0.0,
+                "end_time": 2.5,
+                "x": 100,
+                "y": 0,
+            }
+        ],
+    }
+
+    normalized = normalize_plan_data(legacy_plan)
+
+    assert normalized["render"]["output_name_mode"] == "keep_original"
+    assert normalized["render"]["output_suffix"] == ""
+    assert normalized["render"]["output_name"] == "episode01.mp4"
+
+
+def test_resolve_output_filename_supports_suffix_and_keep_original(tmp_path: Path):
+    source_path = tmp_path / "episode01.mov"
+
+    suffixed_name = resolve_output_filename(
+        source_path,
+        {"output_name_mode": "suffix", "output_suffix": "_preview"},
+    )
+    original_name = resolve_output_filename(
+        source_path,
+        {"output_name_mode": "keep_original"},
+    )
+
+    assert suffixed_name == "episode01_preview.mp4"
+    assert original_name == original_output_filename(source_path)
 
 
 def test_get_enabled_segments_filters_disabled_entries():
@@ -195,6 +250,8 @@ def test_resolve_render_settings_uses_cli_preset_override(tmp_path: Path):
         "render": {
             "mode": "preset",
             "preset_name": "high",
+            "output_name_mode": "suffix",
+            "output_suffix": "_vertical",
             "output_name": "episode01_vertical.mp4",
             "output_width": 1080,
             "output_height": 1920,
@@ -217,6 +274,9 @@ def test_resolve_render_settings_uses_cli_preset_override(tmp_path: Path):
     assert render_settings["output_width"] == 720
     assert render_settings["output_height"] == 1280
     assert render_settings["overwrite"] is False
+    assert render_settings["output_name_mode"] == "suffix"
+    assert render_settings["output_suffix"] == "_vertical"
+    assert render_settings["output_name"] == "episode01_vertical.mp4"
 
 
 def test_resolve_render_settings_supports_custom_mode(tmp_path: Path):
@@ -226,6 +286,8 @@ def test_resolve_render_settings_supports_custom_mode(tmp_path: Path):
         "render": {
             "mode": "custom",
             "preset_name": "manual",
+            "output_name_mode": "suffix",
+            "output_suffix": "_manual-test",
             "output_name": "manual.mp4",
             "output_width": 1080,
             "output_height": 1920,
@@ -245,6 +307,7 @@ def test_resolve_render_settings_supports_custom_mode(tmp_path: Path):
     assert render_settings["video_codec"] == "libx264"
     assert render_settings["audio_bitrate"] == "256k"
     assert render_settings["crf"] == "16"
+    assert render_settings["output_name"] == "episode01_manual-test.mp4"
 
 
 def test_build_render_media_file_uses_audiovideo_for_sources_with_audio(tmp_path: Path):

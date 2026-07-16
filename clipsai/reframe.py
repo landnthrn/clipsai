@@ -29,6 +29,9 @@ DEFAULT_FACE_DETECT_WIDTH = 960
 DEFAULT_SCENE_MERGE_THRESHOLD = 0.25
 DEFAULT_RENDER_PRESET = "high"
 DEFAULT_RENDER_MODE = "preset"
+DEFAULT_OUTPUT_EXTENSION = ".mp4"
+DEFAULT_OUTPUT_NAME_MODE = "suffix"
+DEFAULT_OUTPUT_SUFFIX = "_vertical"
 
 RENDER_PRESETS = {
     "preview": {
@@ -119,11 +122,66 @@ def resolve_hf_token(explicit_token: str | None) -> str:
     return token
 
 
-def default_output_filename(source_path: str | Path) -> str:
+def original_output_filename(source_path: str | Path) -> str:
+    """
+    Return the rendered filename that keeps the source base name.
+    """
+    return f"{Path(source_path).stem}{DEFAULT_OUTPUT_EXTENSION}"
+
+
+def default_output_filename(
+    source_path: str | Path,
+    suffix: str = DEFAULT_OUTPUT_SUFFIX,
+) -> str:
     """
     Return the default rendered output filename for a source video.
     """
-    return f"{Path(source_path).stem}_vertical.mp4"
+    return f"{Path(source_path).stem}{suffix}{DEFAULT_OUTPUT_EXTENSION}"
+
+
+def infer_output_name_settings(source_path: str | Path, render_data: dict) -> tuple[str, str]:
+    """
+    Infer output naming mode and suffix from older plan files when possible.
+    """
+    output_name = render_data.get("output_name")
+    if not output_name:
+        return DEFAULT_OUTPUT_NAME_MODE, DEFAULT_OUTPUT_SUFFIX
+
+    if output_name == default_output_filename(source_path):
+        return "suffix", DEFAULT_OUTPUT_SUFFIX
+    if output_name == original_output_filename(source_path):
+        return "keep_original", ""
+
+    output_name_path = Path(output_name)
+    if output_name_path.suffix.lower() == DEFAULT_OUTPUT_EXTENSION:
+        source_stem = Path(source_path).stem
+        output_stem = output_name_path.stem
+        if output_stem.startswith(source_stem):
+            inferred_suffix = output_stem[len(source_stem) :]
+            if inferred_suffix:
+                return "suffix", inferred_suffix
+
+    return "explicit", ""
+
+
+def resolve_output_filename(source_path: str | Path, render_data: dict) -> str:
+    """
+    Resolve the final output filename from editable render naming fields.
+    """
+    output_name_mode = render_data.get("output_name_mode", DEFAULT_OUTPUT_NAME_MODE)
+    if output_name_mode == "keep_original":
+        return original_output_filename(source_path)
+    if output_name_mode == "suffix":
+        return default_output_filename(
+            source_path,
+            render_data.get("output_suffix", DEFAULT_OUTPUT_SUFFIX),
+        )
+    if output_name_mode == "explicit":
+        output_name = render_data.get("output_name")
+        if not output_name:
+            raise ValueError("Render naming mode 'explicit' requires an output_name value.")
+        return output_name
+    raise ValueError(f"Unsupported output naming mode in plan: {output_name_mode}")
 
 
 def build_segment_plan_entry(segment, index: int) -> dict:
@@ -148,18 +206,25 @@ def build_render_plan_entry(
     render_preset: str,
     output_width: int,
     output_height: int,
+    output_name_mode: str = DEFAULT_OUTPUT_NAME_MODE,
+    output_suffix: str = DEFAULT_OUTPUT_SUFFIX,
 ) -> dict:
     """
     Create the editable render section stored in each plan.
     """
-    return {
+    render_data = {
         "mode": DEFAULT_RENDER_MODE,
         "preset_name": render_preset,
-        "output_name": default_output_filename(video_path),
+        "output_name_mode": output_name_mode,
+        "output_suffix": output_suffix,
         "output_width": output_width,
         "output_height": output_height,
         "overwrite": True,
         **RENDER_PRESETS[render_preset],
+    }
+    render_data["output_name"] = resolve_output_filename(video_path, render_data)
+    return {
+        **render_data,
     }
 
 
@@ -171,6 +236,8 @@ def build_plan(
     output_height: int,
     render_preset: str,
     analysis_settings: dict,
+    output_name_mode: str = DEFAULT_OUTPUT_NAME_MODE,
+    output_suffix: str = DEFAULT_OUTPUT_SUFFIX,
 ) -> dict:
     """
     Build a serializable plan from a Crops result.
@@ -193,6 +260,8 @@ def build_plan(
             render_preset=render_preset,
             output_width=output_width,
             output_height=output_height,
+            output_name_mode=output_name_mode,
+            output_suffix=output_suffix,
         ),
         "segments": [
             build_segment_plan_entry(segment=segment, index=index)
@@ -224,13 +293,19 @@ def normalize_plan_data(plan_data: dict) -> dict:
     normalized_plan = dict(plan_data)
     source_path = Path(normalized_plan["source_path"]).expanduser().resolve()
     render_data = dict(normalized_plan.get("render", {}))
+    inferred_output_name_mode, inferred_output_suffix = infer_output_name_settings(
+        source_path=source_path,
+        render_data=render_data,
+    )
 
     render_data.setdefault("mode", DEFAULT_RENDER_MODE)
     render_data.setdefault("preset_name", DEFAULT_RENDER_PRESET)
-    render_data.setdefault("output_name", default_output_filename(source_path))
+    render_data.setdefault("output_name_mode", inferred_output_name_mode)
+    render_data.setdefault("output_suffix", inferred_output_suffix)
     render_data.setdefault("output_width", DEFAULT_OUTPUT_WIDTH)
     render_data.setdefault("output_height", DEFAULT_OUTPUT_HEIGHT)
     render_data.setdefault("overwrite", True)
+    render_data["output_name"] = resolve_output_filename(source_path, render_data)
 
     normalized_plan["plan_version"] = max(
         int(normalized_plan.get("plan_version", 1)),
@@ -409,10 +484,15 @@ def resolve_render_settings(
     resolved_settings["output_height"] = output_height_override or int(
         render_data.get("output_height", DEFAULT_OUTPUT_HEIGHT)
     )
-    resolved_settings["output_name"] = render_data.get(
-        "output_name",
-        default_output_filename(source_path),
+    resolved_settings["output_name_mode"] = render_data.get(
+        "output_name_mode",
+        DEFAULT_OUTPUT_NAME_MODE,
     )
+    resolved_settings["output_suffix"] = render_data.get(
+        "output_suffix",
+        DEFAULT_OUTPUT_SUFFIX,
+    )
+    resolved_settings["output_name"] = resolve_output_filename(source_path, render_data)
     resolved_settings["overwrite"] = (
         bool(render_data.get("overwrite", True))
         if overwrite_override is None
@@ -428,6 +508,8 @@ def analyze_video(
     render_preset: str,
     output_width: int,
     output_height: int,
+    output_name_mode: str,
+    output_suffix: str,
     min_segment_duration: float,
     samples_per_segment: int,
     face_detect_width: int,
@@ -461,6 +543,8 @@ def analyze_video(
         output_height=output_height,
         render_preset=render_preset,
         analysis_settings=analysis_settings,
+        output_name_mode=output_name_mode,
+        output_suffix=output_suffix,
     )
     return store_plan(default_plan_path(video_path, plans_dir), plan_data)
 
@@ -652,6 +736,8 @@ def analyze_command(args: argparse.Namespace) -> int:
             render_preset=args.render_preset,
             output_width=args.output_width,
             output_height=args.output_height,
+            output_name_mode=args.output_name_mode,
+            output_suffix=args.output_suffix,
             min_segment_duration=args.min_segment_duration,
             samples_per_segment=args.samples_per_segment,
             face_detect_width=args.face_detect_width,
@@ -729,6 +815,17 @@ def build_parser() -> argparse.ArgumentParser:
             choices=sorted(RENDER_PRESETS.keys()),
             default="high",
             help="Named render preset stored in each plan.",
+        )
+        subparser.add_argument(
+            "--output-name-mode",
+            choices=["suffix", "keep_original"],
+            default=DEFAULT_OUTPUT_NAME_MODE,
+            help="How rendered filenames should be generated in each plan.",
+        )
+        subparser.add_argument(
+            "--output-suffix",
+            default=DEFAULT_OUTPUT_SUFFIX,
+            help="Suffix used when output-name-mode is set to 'suffix'.",
         )
         subparser.add_argument(
             "--hf-token",
