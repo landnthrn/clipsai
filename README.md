@@ -74,6 +74,13 @@ For a cleaner file-or-folder workflow, this fork also includes a small command f
 2. optionally editing those plans
 3. rendering final vertical outputs from the saved plans
 
+Each plan now stores:
+
+- segment IDs for easier manual reference
+- an `enabled` switch per segment so you can skip sections without deleting them
+- a `notes` field per segment
+- render settings such as preset/custom mode, output name, size, and overwrite behavior
+
 Analyze only:
 
 ```bash
@@ -86,8 +93,29 @@ Render only:
 clipsai-reframe render --input "plans" --output-dir "output"
 ```
 
+Quick preview rerender from an existing plan:
+
+```bash
+clipsai-reframe render --input "plans" --output-dir "output" --render-preset preview
+```
+
 One-shot run:
 
 ```bash
 clipsai-reframe run --input "/abs/path/to/videos" --plans-dir "plans" --output-dir "output"
+```
+
+Example plan segment:
+
+```json
+{
+  "segment_id": "segment_0001",
+  "enabled": true,
+  "speakers": [0],
+  "start_time": 0.0,
+  "end_time": 8.2,
+  "x": 420,
+  "y": 0,
+  "notes": ""
+}
 ```

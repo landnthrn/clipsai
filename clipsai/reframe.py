@@ -10,6 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+PLAN_VERSION = 2
 SUPPORTED_VIDEO_EXTENSIONS = {
     ".mp4",
     ".mov",
@@ -26,8 +27,18 @@ DEFAULT_MIN_SEGMENT_DURATION = 1.5
 DEFAULT_SAMPLES_PER_SEGMENT = 13
 DEFAULT_FACE_DETECT_WIDTH = 960
 DEFAULT_SCENE_MERGE_THRESHOLD = 0.25
+DEFAULT_RENDER_PRESET = "high"
+DEFAULT_RENDER_MODE = "preset"
 
 RENDER_PRESETS = {
+    "preview": {
+        "video_codec": "libx264",
+        "audio_codec": "aac",
+        "audio_bitrate": "160k",
+        "preset": "veryfast",
+        "crf": "22",
+        "scale_flags": "lanczos",
+    },
     "high": {
         "video_codec": "libx264",
         "audio_codec": "aac",
@@ -108,6 +119,50 @@ def resolve_hf_token(explicit_token: str | None) -> str:
     return token
 
 
+def default_output_filename(source_path: str | Path) -> str:
+    """
+    Return the default rendered output filename for a source video.
+    """
+    return f"{Path(source_path).stem}_vertical.mp4"
+
+
+def build_segment_plan_entry(segment, index: int) -> dict:
+    """
+    Convert a resize segment into a hand-editable plan entry.
+    """
+    segment_data = segment.to_dict()
+    return {
+        "segment_id": f"segment_{index + 1:04d}",
+        "enabled": True,
+        "speakers": segment_data["speakers"],
+        "start_time": segment_data["start_time"],
+        "end_time": segment_data["end_time"],
+        "x": segment_data["x"],
+        "y": segment_data["y"],
+        "notes": "",
+    }
+
+
+def build_render_plan_entry(
+    video_path: str | Path,
+    render_preset: str,
+    output_width: int,
+    output_height: int,
+) -> dict:
+    """
+    Create the editable render section stored in each plan.
+    """
+    return {
+        "mode": DEFAULT_RENDER_MODE,
+        "preset_name": render_preset,
+        "output_name": default_output_filename(video_path),
+        "output_width": output_width,
+        "output_height": output_height,
+        "overwrite": True,
+        **RENDER_PRESETS[render_preset],
+    }
+
+
 def build_plan(
     video_path: str | Path,
     crops,
@@ -122,7 +177,7 @@ def build_plan(
     """
     video_path = Path(video_path).resolve()
     return {
-        "plan_version": 1,
+        "plan_version": PLAN_VERSION,
         "source_path": str(video_path),
         "source_filename": video_path.name,
         "analysis": {
@@ -133,14 +188,101 @@ def build_plan(
             "aspect_ratio": list(aspect_ratio),
             **analysis_settings,
         },
-        "render": {
-            "preset_name": render_preset,
-            "output_width": output_width,
-            "output_height": output_height,
-            **RENDER_PRESETS[render_preset],
-        },
-        "segments": [segment.to_dict() for segment in crops.segments],
+        "render": build_render_plan_entry(
+            video_path=video_path,
+            render_preset=render_preset,
+            output_width=output_width,
+            output_height=output_height,
+        ),
+        "segments": [
+            build_segment_plan_entry(segment=segment, index=index)
+            for index, segment in enumerate(crops.segments)
+        ],
     }
+
+
+def normalize_segment_plan_entry(segment_data: dict, index: int) -> dict:
+    """
+    Fill in editable segment defaults while preserving existing segment values.
+    """
+    normalized_segment = dict(segment_data)
+    normalized_segment.setdefault("segment_id", f"segment_{index + 1:04d}")
+    normalized_segment.setdefault("enabled", True)
+    normalized_segment.setdefault("notes", "")
+    return normalized_segment
+
+
+def normalize_plan_data(plan_data: dict) -> dict:
+    """
+    Upgrade older plan files in memory and fill in editable defaults.
+    """
+    if "source_path" not in plan_data:
+        raise ValueError("Plan is missing required field: source_path")
+    if "segments" not in plan_data:
+        raise ValueError("Plan is missing required field: segments")
+
+    normalized_plan = dict(plan_data)
+    source_path = Path(normalized_plan["source_path"]).expanduser().resolve()
+    render_data = dict(normalized_plan.get("render", {}))
+
+    render_data.setdefault("mode", DEFAULT_RENDER_MODE)
+    render_data.setdefault("preset_name", DEFAULT_RENDER_PRESET)
+    render_data.setdefault("output_name", default_output_filename(source_path))
+    render_data.setdefault("output_width", DEFAULT_OUTPUT_WIDTH)
+    render_data.setdefault("output_height", DEFAULT_OUTPUT_HEIGHT)
+    render_data.setdefault("overwrite", True)
+
+    normalized_plan["plan_version"] = max(
+        int(normalized_plan.get("plan_version", 1)),
+        PLAN_VERSION,
+    )
+    normalized_plan["source_path"] = str(source_path)
+    normalized_plan.setdefault("source_filename", source_path.name)
+    normalized_plan["render"] = render_data
+    normalized_plan["segments"] = [
+        normalize_segment_plan_entry(segment_data=segment, index=index)
+        for index, segment in enumerate(normalized_plan["segments"])
+    ]
+    return normalized_plan
+
+
+def validate_plan_data(plan_data: dict) -> dict:
+    """
+    Validate the core editable plan structure with user-facing errors.
+    """
+    for required_key in ("source_path", "analysis", "render", "segments"):
+        if required_key not in plan_data:
+            raise ValueError(f"Plan is missing required field: {required_key}")
+
+    if not isinstance(plan_data["segments"], list) or not plan_data["segments"]:
+        raise ValueError("Plan must contain at least one segment.")
+
+    for segment in plan_data["segments"]:
+        segment_id = segment.get("segment_id", "unknown-segment")
+        for required_key in ("speakers", "start_time", "end_time", "x", "y"):
+            if required_key not in segment:
+                raise ValueError(
+                    f"Segment '{segment_id}' is missing required field: {required_key}"
+                )
+        if float(segment["end_time"]) <= float(segment["start_time"]):
+            raise ValueError(
+                f"Segment '{segment_id}' has an invalid time range. "
+                "end_time must be greater than start_time."
+            )
+
+    return plan_data
+
+
+def get_enabled_segments(plan_data: dict) -> list[dict]:
+    """
+    Return only enabled plan segments and fail clearly if none remain.
+    """
+    enabled_segments = [
+        segment for segment in plan_data["segments"] if segment.get("enabled", True)
+    ]
+    if not enabled_segments:
+        raise ValueError("Plan has no enabled segments to render.")
+    return enabled_segments
 
 
 def create_crops_from_plan(plan_data: dict) -> Crops:
@@ -158,7 +300,7 @@ def create_crops_from_plan(plan_data: dict) -> Crops:
             x=segment["x"],
             y=segment["y"],
         )
-        for segment in plan_data["segments"]
+        for segment in get_enabled_segments(plan_data)
     ]
     analysis = plan_data["analysis"]
     return Crops(
@@ -181,7 +323,7 @@ def default_output_path(source_path: Path, output_dir: Path) -> Path:
     """
     Return the default rendered output path for a source video.
     """
-    return output_dir / f"{source_path.stem}_vertical.mp4"
+    return output_dir / default_output_filename(source_path)
 
 
 def store_plan(plan_path: Path, plan_data: dict) -> Path:
@@ -200,7 +342,83 @@ def load_plan(plan_path: Path) -> dict:
     Read a plan JSON file from disk.
     """
     with plan_path.open("r", encoding="utf-8") as file_object:
-        return json.load(file_object)
+        return validate_plan_data(normalize_plan_data(json.load(file_object)))
+
+
+def resolve_render_settings(
+    plan_data: dict,
+    render_preset_override: str | None = None,
+    output_width_override: int | None = None,
+    output_height_override: int | None = None,
+    overwrite_override: bool | None = None,
+) -> dict:
+    """
+    Resolve preset/custom render settings plus optional CLI overrides.
+    """
+    render_data = dict(plan_data["render"])
+    source_path = Path(plan_data["source_path"])
+
+    if render_preset_override is not None:
+        render_data["mode"] = "preset"
+        render_data["preset_name"] = render_preset_override
+
+    mode = render_data.get("mode", DEFAULT_RENDER_MODE)
+    if mode == "preset":
+        preset_name = render_data.get("preset_name", DEFAULT_RENDER_PRESET)
+        if preset_name not in RENDER_PRESETS:
+            raise ValueError(f"Unknown render preset in plan: {preset_name}")
+        resolved_settings = dict(RENDER_PRESETS[preset_name])
+    elif mode == "custom":
+        required_fields = [
+            "video_codec",
+            "audio_codec",
+            "audio_bitrate",
+            "preset",
+            "scale_flags",
+        ]
+        missing_fields = [
+            field_name for field_name in required_fields if field_name not in render_data
+        ]
+        if missing_fields:
+            missing_fields_text = ", ".join(missing_fields)
+            raise ValueError(
+                "Custom render mode is missing required fields: "
+                f"{missing_fields_text}"
+            )
+        resolved_settings = {field_name: render_data[field_name] for field_name in required_fields}
+        if render_data["video_codec"] == "libx264":
+            if "crf" not in render_data:
+                raise ValueError("Custom render mode with libx264 requires a 'crf' value.")
+            resolved_settings["crf"] = render_data["crf"]
+        else:
+            for required_field in ("cq", "bitrate"):
+                if required_field not in render_data:
+                    raise ValueError(
+                        "Custom render mode for non-libx264 codecs requires "
+                        f"'{required_field}'."
+                    )
+                resolved_settings[required_field] = render_data[required_field]
+    else:
+        raise ValueError(f"Unsupported render mode in plan: {mode}")
+
+    resolved_settings["mode"] = mode
+    resolved_settings["preset_name"] = render_data.get("preset_name", DEFAULT_RENDER_PRESET)
+    resolved_settings["output_width"] = output_width_override or int(
+        render_data.get("output_width", DEFAULT_OUTPUT_WIDTH)
+    )
+    resolved_settings["output_height"] = output_height_override or int(
+        render_data.get("output_height", DEFAULT_OUTPUT_HEIGHT)
+    )
+    resolved_settings["output_name"] = render_data.get(
+        "output_name",
+        default_output_filename(source_path),
+    )
+    resolved_settings["overwrite"] = (
+        bool(render_data.get("overwrite", True))
+        if overwrite_override is None
+        else overwrite_override
+    )
+    return resolved_settings
 
 
 def analyze_video(
@@ -299,7 +517,14 @@ def build_render_media_file(
     return video_file_cls(str(source_path))
 
 
-def render_plan(plan_path: Path, output_dir: Path) -> Path:
+def render_plan(
+    plan_path: Path,
+    output_dir: Path,
+    render_preset_override: str | None = None,
+    output_width_override: int | None = None,
+    output_height_override: int | None = None,
+    overwrite_override: bool | None = None,
+) -> Path:
     """
     Render one plan JSON file into a vertical video file.
     """
@@ -309,9 +534,19 @@ def render_plan(plan_path: Path, output_dir: Path) -> Path:
         raise FileNotFoundError(f"Source video from plan does not exist: {source_path}")
 
     crops = create_crops_from_plan(plan_data)
-    render_settings = plan_data["render"]
-    output_path = default_output_path(source_path, output_dir)
+    render_settings = resolve_render_settings(
+        plan_data=plan_data,
+        render_preset_override=render_preset_override,
+        output_width_override=output_width_override,
+        output_height_override=output_height_override,
+        overwrite_override=overwrite_override,
+    )
+    output_path = output_dir / render_settings["output_name"]
     output_dir.mkdir(parents=True, exist_ok=True)
+    if output_path.exists() and render_settings["overwrite"] is False:
+        raise FileExistsError(
+            f"Output file already exists and overwrite is disabled: {output_path}"
+        )
 
     temp_dir = output_dir / f"{source_path.stem}_temp_segments"
     if temp_dir.exists():
@@ -386,7 +621,7 @@ def render_plan(plan_path: Path, output_dir: Path) -> Path:
     run_command(
         [
             "ffmpeg",
-            "-y",
+            "-y" if render_settings["overwrite"] else "-n",
             "-f",
             "concat",
             "-safe",
@@ -433,7 +668,14 @@ def render_command(args: argparse.Namespace) -> int:
     output_dir = Path(args.output_dir).expanduser().resolve()
     plan_files = discover_plan_files(args.input)
     for plan_path in plan_files:
-        output_path = render_plan(plan_path=plan_path, output_dir=output_dir)
+        output_path = render_plan(
+            plan_path=plan_path,
+            output_dir=output_dir,
+            render_preset_override=args.render_preset,
+            output_width_override=args.output_width,
+            output_height_override=args.output_height,
+            overwrite_override=args.overwrite,
+        )
         print(f"Rendered video: {output_path}")
     return 0
 
@@ -446,6 +688,10 @@ def run_command_handler(args: argparse.Namespace) -> int:
     render_args = argparse.Namespace(
         input=args.plans_dir,
         output_dir=args.output_dir,
+        render_preset=None,
+        output_width=None,
+        output_height=None,
+        overwrite=None,
     )
     return render_command(render_args)
 
@@ -530,6 +776,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default="output",
         help="Where rendered videos should be written.",
+    )
+    render_parser.add_argument(
+        "--render-preset",
+        choices=sorted(RENDER_PRESETS.keys()),
+        default=None,
+        help="Optional preset override for this render run.",
+    )
+    render_parser.add_argument(
+        "--output-width",
+        type=int,
+        default=None,
+        help="Optional output width override for this render run.",
+    )
+    render_parser.add_argument(
+        "--output-height",
+        type=int,
+        default=None,
+        help="Optional output height override for this render run.",
+    )
+    render_parser.add_argument(
+        "--overwrite",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Optional override for whether existing outputs may be replaced.",
     )
     render_parser.set_defaults(handler=render_command)
 
