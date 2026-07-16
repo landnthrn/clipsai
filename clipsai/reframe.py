@@ -4,6 +4,7 @@ Simple analyze/render workflow for speaker-focused vertical reframing.
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import datetime
 import json
 import os
@@ -33,6 +34,7 @@ DEFAULT_RENDER_MODE = "preset"
 DEFAULT_OUTPUT_EXTENSION = ".mp4"
 DEFAULT_OUTPUT_NAME_MODE = "suffix"
 DEFAULT_OUTPUT_SUFFIX = "_vertical"
+DEFAULT_DEBUG_EXPORTS_DIRNAME = "debug"
 
 RENDER_PRESETS = {
     "preview": {
@@ -222,6 +224,7 @@ def build_render_plan_entry(
         "output_height": output_height,
         "overwrite": True,
         "export_summary_markdown": False,
+        "export_result_debug": False,
         **RENDER_PRESETS[render_preset],
     }
     return {
@@ -268,6 +271,10 @@ def build_plan_editing_help() -> dict:
             ),
             "overwrite": "true = replace same-name output. false = fail instead.",
             "export_summary_markdown": "true = also export a markdown summary after render. false = skip it.",
+            "export_result_debug": (
+                "true = export result debug files into a per-video folder. "
+                "false = skip them."
+            ),
             "output_width": "Rendered width in pixels. Usually not meant to be edited unless you want a different export size.",
             "output_height": "Rendered height in pixels. Usually not meant to be edited unless you want a different export size.",
             "video_codec": "Advanced render field. Usually not meant to be edited unless mode is custom.",
@@ -371,6 +378,7 @@ def normalize_plan_data(plan_data: dict) -> dict:
     render_data.setdefault("output_height", DEFAULT_OUTPUT_HEIGHT)
     render_data.setdefault("overwrite", True)
     render_data.setdefault("export_summary_markdown", False)
+    render_data.setdefault("export_result_debug", False)
 
     normalized_plan["plan_version"] = max(
         int(normalized_plan.get("plan_version", 1)),
@@ -574,7 +582,75 @@ def resolve_render_settings(
     resolved_settings["export_summary_markdown"] = bool(
         render_data.get("export_summary_markdown", False)
     )
+    resolved_settings["export_result_debug"] = bool(
+        render_data.get("export_result_debug", False)
+    )
     return resolved_settings
+
+
+def format_result_debug_timestamp(now: datetime) -> str:
+    """
+    Format a Windows-safe timestamp for result debug folder names.
+    """
+    return now.strftime("%I-%M%p_%m%d").lstrip("0")
+
+
+def sanitize_debug_folder_name(name: str) -> str:
+    """
+    Convert a display name into a filesystem-safe folder name.
+    """
+    invalid_characters = '<>:"/\\|?*'
+    sanitized = "".join("_" if character in invalid_characters else character for character in name)
+    sanitized = sanitized.strip().rstrip(".")
+    return sanitized or "batch"
+
+
+def infer_batch_debug_label(plan_files: list[Path], input_path: Path) -> str:
+    """
+    Infer a batch label from the common source folder when possible.
+    """
+    source_parent_names = []
+    for plan_path in plan_files:
+        plan_data = load_plan(plan_path)
+        source_parent_names.append(Path(plan_data["source_path"]).parent.name)
+
+    unique_parent_names = {name for name in source_parent_names if name}
+    if len(unique_parent_names) == 1:
+        return unique_parent_names.pop()
+
+    return input_path.name or "batch"
+
+
+def build_result_debug_batch_root(
+    output_dir: Path,
+    batch_label: str,
+    now: datetime,
+) -> Path:
+    """
+    Build the parent result-debug folder for one batch render run.
+    """
+    safe_label = sanitize_debug_folder_name(batch_label)
+    timestamp = format_result_debug_timestamp(now)
+    return output_dir / DEFAULT_DEBUG_EXPORTS_DIRNAME / f"{safe_label}_{timestamp}"
+
+
+def build_result_debug_paths(
+    source_path: Path,
+    output_dir: Path,
+    batch_root: Path | None,
+) -> dict[str, Path]:
+    """
+    Resolve the per-video result-debug file paths.
+    """
+    video_root = (batch_root or (output_dir / DEFAULT_DEBUG_EXPORTS_DIRNAME)) / sanitize_debug_folder_name(
+        source_path.stem
+    )
+    return {
+        "video_root": video_root,
+        "summary_path": video_root / "summary.md",
+        "details_path": video_root / "details.json",
+        "timeline_path": video_root / "timeline.csv",
+    }
 
 
 def build_render_summary_markdown(
@@ -635,6 +711,92 @@ def build_render_summary_markdown(
     return "\n".join(lines) + "\n"
 
 
+def build_timeline_csv_rows(
+    enabled_segments: list[dict],
+    disabled_segments: list[dict],
+) -> list[dict]:
+    """
+    Build flat CSV rows for rendered and skipped segments.
+    """
+    rows = []
+    for status, segments in (("enabled", enabled_segments), ("disabled", disabled_segments)):
+        for segment in segments:
+            start_time = float(segment["start_time"])
+            end_time = float(segment["end_time"])
+            rows.append(
+                {
+                    "segment_id": segment.get("segment_id", ""),
+                    "status": status,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "duration_seconds": round(end_time - start_time, 6),
+                    "speakers": ",".join(str(speaker) for speaker in segment.get("speakers", [])),
+                    "x": segment.get("x", ""),
+                    "y": segment.get("y", ""),
+                    "notes": segment.get("notes", ""),
+                }
+            )
+    return rows
+
+
+def build_result_debug_payload(
+    generated_at: str,
+    plan_path: Path,
+    source_path: Path,
+    output_path: Path,
+    debug_paths: dict[str, Path],
+    render_settings: dict,
+    enabled_segments: list[dict],
+    disabled_segments: list[dict],
+) -> dict:
+    """
+    Build the structured JSON payload for result-debug exports.
+    """
+    timeline_rows = build_timeline_csv_rows(
+        enabled_segments=enabled_segments,
+        disabled_segments=disabled_segments,
+    )
+    rendered_start_time = None
+    rendered_end_time = None
+    if enabled_segments:
+        rendered_start_time = min(float(segment["start_time"]) for segment in enabled_segments)
+        rendered_end_time = max(float(segment["end_time"]) for segment in enabled_segments)
+
+    return {
+        "created_at": generated_at,
+        "files": {
+            "plan_path": str(plan_path),
+            "source_path": str(source_path),
+            "output_path": str(output_path),
+            "debug_folder": str(debug_paths["video_root"]),
+            "summary_path": str(debug_paths["summary_path"]),
+            "details_path": str(debug_paths["details_path"]),
+            "timeline_path": str(debug_paths["timeline_path"]),
+        },
+        "render": {
+            "mode": render_settings["mode"],
+            "preset_name": render_settings["preset_name"],
+            "output_name_mode": render_settings["output_name_mode"],
+            "output_suffix": render_settings["output_suffix"],
+            "output_name": render_settings["output_name"],
+            "output_width": render_settings["output_width"],
+            "output_height": render_settings["output_height"],
+            "overwrite": render_settings["overwrite"],
+            "video_codec": render_settings["video_codec"],
+            "audio_codec": render_settings["audio_codec"],
+            "audio_bitrate": render_settings["audio_bitrate"],
+            "scale_flags": render_settings["scale_flags"],
+        },
+        "segments": {
+            "enabled_count": len(enabled_segments),
+            "disabled_count": len(disabled_segments),
+            "rendered_start_time": rendered_start_time,
+            "rendered_end_time": rendered_end_time,
+            "timeline_rows": timeline_rows,
+        },
+    }
+
+
 def write_render_summary(
     summary_path: Path,
     summary_markdown: str,
@@ -652,6 +814,53 @@ def write_render_summary(
     with summary_path.open("w", encoding="utf-8") as file_object:
         file_object.write(summary_markdown)
     return summary_path
+
+
+def write_result_debug_exports(
+    debug_paths: dict[str, Path],
+    summary_markdown: str,
+    details_payload: dict,
+    timeline_rows: list[dict],
+    overwrite: bool,
+) -> dict[str, Path]:
+    """
+    Write per-video result-debug exports.
+    """
+    for path_key in ("summary_path", "details_path", "timeline_path"):
+        path = debug_paths[path_key]
+        if path.exists() and overwrite is False:
+            raise FileExistsError(
+                f"Result debug file already exists and overwrite is disabled: {path}"
+            )
+
+    debug_paths["video_root"].mkdir(parents=True, exist_ok=True)
+
+    with debug_paths["summary_path"].open("w", encoding="utf-8") as file_object:
+        file_object.write(summary_markdown)
+
+    with debug_paths["details_path"].open("w", encoding="utf-8") as file_object:
+        json.dump(details_payload, file_object, indent=2)
+        file_object.write("\n")
+
+    with debug_paths["timeline_path"].open("w", encoding="utf-8", newline="") as file_object:
+        writer = csv.DictWriter(
+            file_object,
+            fieldnames=[
+                "segment_id",
+                "status",
+                "start_time",
+                "end_time",
+                "duration_seconds",
+                "speakers",
+                "x",
+                "y",
+                "notes",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(timeline_rows)
+
+    return debug_paths
 
 
 def analyze_video(
@@ -761,6 +970,8 @@ def render_plan(
     output_width_override: int | None = None,
     output_height_override: int | None = None,
     overwrite_override: bool | None = None,
+    result_debug_batch_root: Path | None = None,
+    render_started_at: datetime | None = None,
 ) -> Path:
     """
     Render one plan JSON file into a vertical video file.
@@ -782,8 +993,15 @@ def render_plan(
         output_height_override=output_height_override,
         overwrite_override=overwrite_override,
     )
+    render_started_at = render_started_at or datetime.now()
+    generated_at = render_started_at.strftime("%m/%d/%Y %I:%M %p")
     output_path = output_dir / render_settings["output_name"]
     summary_path = default_summary_path(output_path)
+    debug_paths = build_result_debug_paths(
+        source_path=source_path,
+        output_dir=output_dir,
+        batch_root=result_debug_batch_root,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     if output_path.exists() and render_settings["overwrite"] is False:
         raise FileExistsError(
@@ -797,6 +1015,13 @@ def render_plan(
         raise FileExistsError(
             f"Summary file already exists and overwrite is disabled: {summary_path}"
         )
+    if render_settings["export_result_debug"] and render_settings["overwrite"] is False:
+        for path_key in ("summary_path", "details_path", "timeline_path"):
+            debug_path = debug_paths[path_key]
+            if debug_path.exists():
+                raise FileExistsError(
+                    f"Result debug file already exists and overwrite is disabled: {debug_path}"
+                )
 
     temp_dir = output_dir / f"{source_path.stem}_temp_segments"
     if temp_dir.exists():
@@ -885,7 +1110,6 @@ def render_plan(
     )
 
     if render_settings["export_summary_markdown"]:
-        generated_at = datetime.now().strftime("%m/%d/%Y %I:%M %p")
         summary_markdown = build_render_summary_markdown(
             generated_at=generated_at,
             plan_path=plan_path,
@@ -899,6 +1123,39 @@ def render_plan(
         write_render_summary(
             summary_path=summary_path,
             summary_markdown=summary_markdown,
+            overwrite=render_settings["overwrite"],
+        )
+
+    if render_settings["export_result_debug"]:
+        result_summary_markdown = build_render_summary_markdown(
+            generated_at=generated_at,
+            plan_path=plan_path,
+            source_path=source_path,
+            output_path=output_path,
+            summary_path=debug_paths["summary_path"],
+            render_settings=render_settings,
+            enabled_segments=enabled_segments,
+            disabled_segments=disabled_segments,
+        )
+        timeline_rows = build_timeline_csv_rows(
+            enabled_segments=enabled_segments,
+            disabled_segments=disabled_segments,
+        )
+        details_payload = build_result_debug_payload(
+            generated_at=generated_at,
+            plan_path=plan_path,
+            source_path=source_path,
+            output_path=output_path,
+            debug_paths=debug_paths,
+            render_settings=render_settings,
+            enabled_segments=enabled_segments,
+            disabled_segments=disabled_segments,
+        )
+        write_result_debug_exports(
+            debug_paths=debug_paths,
+            summary_markdown=result_summary_markdown,
+            details_payload=details_payload,
+            timeline_rows=timeline_rows,
             overwrite=render_settings["overwrite"],
         )
 
@@ -937,7 +1194,17 @@ def render_command(args: argparse.Namespace) -> int:
     CLI handler for render-only mode.
     """
     output_dir = Path(args.output_dir).expanduser().resolve()
-    plan_files = discover_plan_files(args.input)
+    input_path = Path(args.input).expanduser().resolve()
+    plan_files = discover_plan_files(input_path)
+    render_started_at = datetime.now()
+    result_debug_batch_root = None
+    if input_path.is_dir():
+        batch_label = infer_batch_debug_label(plan_files=plan_files, input_path=input_path)
+        result_debug_batch_root = build_result_debug_batch_root(
+            output_dir=output_dir,
+            batch_label=batch_label,
+            now=render_started_at,
+        )
     for plan_path in plan_files:
         output_path = render_plan(
             plan_path=plan_path,
@@ -946,6 +1213,8 @@ def render_command(args: argparse.Namespace) -> int:
             output_width_override=args.output_width,
             output_height_override=args.output_height,
             overwrite_override=args.overwrite,
+            result_debug_batch_root=result_debug_batch_root,
+            render_started_at=render_started_at,
         )
         print(f"Rendered video: {output_path}")
     return 0
