@@ -237,6 +237,19 @@ def build_plan_editing_help() -> dict:
             "here as editing help."
         ),
         "plan_version": "Internal plan format version. Leave this value alone.",
+        "source_path": "Original source video path. Usually not meant to be edited.",
+        "source_filename": "Original source video filename. Usually not meant to be edited.",
+        "analysis": {
+            "original_width": "Detected source width. Usually not meant to be edited.",
+            "original_height": "Detected source height. Usually not meant to be edited.",
+            "crop_width": "Detected crop width from analysis. Usually not meant to be edited.",
+            "crop_height": "Detected crop height from analysis. Usually not meant to be edited.",
+            "aspect_ratio": "Target crop shape from analysis. Usually not meant to be edited.",
+            "min_segment_duration": "Analyze-time setting used to build this plan. Usually not meant to be edited after analysis.",
+            "samples_per_segment": "Analyze-time setting used to build this plan. Usually not meant to be edited after analysis.",
+            "face_detect_width": "Analyze-time face-detection size. Usually not meant to be edited after analysis.",
+            "scene_merge_threshold": "Analyze-time merge setting. Usually not meant to be edited after analysis.",
+        },
         "render": {
             "mode": (
                 "preset = use preset_name. custom = use the advanced codec fields "
@@ -252,9 +265,21 @@ def build_plan_editing_help() -> dict:
                 "Examples: _vertical or _social-cut."
             ),
             "overwrite": "true = replace same-name output. false = fail instead.",
+            "output_width": "Rendered width in pixels. Usually not meant to be edited unless you want a different export size.",
+            "output_height": "Rendered height in pixels. Usually not meant to be edited unless you want a different export size.",
+            "video_codec": "Advanced render field. Usually not meant to be edited unless mode is custom.",
+            "audio_codec": "Advanced render field. Usually not meant to be edited unless mode is custom.",
+            "audio_bitrate": "Advanced render field. Usually not meant to be edited unless mode is custom.",
+            "preset": "Advanced encoder preset. Usually not meant to be edited unless mode is custom.",
+            "crf": "Advanced quality value for libx264. Usually not meant to be edited unless mode is custom.",
+            "cq": "Advanced quality value for NVENC-style codecs. Usually not meant to be edited unless mode is custom.",
+            "bitrate": "Advanced bitrate field for NVENC-style codecs. Usually not meant to be edited unless mode is custom.",
+            "scale_flags": "Advanced scaling field. Usually not meant to be edited unless mode is custom.",
         },
         "segments": {
+            "segment_id": "Stable label for this segment. Usually not meant to be edited.",
             "enabled": "true = render this segment. false = skip it.",
+            "speakers": "Detected speaker IDs for this segment. Usually not meant to be edited.",
             "start_time": "Segment start time in seconds.",
             "end_time": "Segment end time in seconds.",
             "x": "Horizontal crop position in source pixels.",
