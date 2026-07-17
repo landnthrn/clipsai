@@ -1,10 +1,17 @@
 # standard library imports
+import json
 from unittest.mock import patch, Mock
 from types import ModuleType
 
 # local package imports
+from clipsai.diarize.config import DIARIZATION_MODELS
 from clipsai.diarize.pyannote import PyannoteDiarizer
 from clipsai.diarize.pyannote import _patch_speechbrain_lazy_modules
+from clipsai.diarize.pyannote import build_pipeline_auth_kwargs
+from clipsai.diarize.pyannote import build_speaker_count_kwargs
+from clipsai.diarize.pyannote import extract_diarization_annotations
+from clipsai.diarize.pyannote import get_pyannote_audio_major_version
+from clipsai.diarize.pyannote import serialize_annotation
 
 # third party imports
 import pandas as pd
@@ -33,6 +40,42 @@ def test_patch_speechbrain_lazy_modules_adds_file_only_to_lazy_redirects():
     assert already_patched_module.__file__ == "already-set"
 
 
+def test_get_pyannote_audio_major_version_parses_major_number():
+    assert get_pyannote_audio_major_version("4.0.1") == 4
+
+
+def test_build_pipeline_auth_kwargs_switches_by_major_version():
+    with patch("clipsai.diarize.pyannote.get_pyannote_audio_major_version", return_value=4):
+        assert build_pipeline_auth_kwargs("token-123") == {"token": "token-123"}
+
+
+def test_build_speaker_count_kwargs_validates_conflicting_inputs():
+    with pytest.raises(ValueError, match="cannot be combined"):
+        build_speaker_count_kwargs(num_speakers=2, min_speakers=1)
+
+
+def test_build_speaker_count_kwargs_returns_expected_values():
+    kwargs = build_speaker_count_kwargs(min_speakers=2, max_speakers=4)
+
+    assert kwargs == {"min_speakers": 2, "max_speakers": 4}
+
+
+def test_extract_diarization_annotations_supports_wrapper_outputs():
+    annotation = Annotation()
+
+    class WrappedOutput:
+        def __init__(self):
+            self.speaker_diarization = annotation
+            self.exclusive_speaker_diarization = annotation
+
+    regular_annotation, exclusive_annotation = extract_diarization_annotations(
+        WrappedOutput()
+    )
+
+    assert regular_annotation is annotation
+    assert exclusive_annotation is annotation
+
+
 @pytest.fixture
 def mock_diarizer():
     with patch("pyannote.audio.Pipeline.from_pretrained", return_value=Mock()):
@@ -47,6 +90,25 @@ def mock_audio_file():
     mock_audio_file.path.return_value = "mock_audio.mp3"
     mock_audio_file.get_duration.return_value = 30.0
     return mock_audio_file
+
+
+def test_pyannote_diarizer_uses_selected_pipeline_checkpoint():
+    with patch("pyannote.audio.Pipeline.from_pretrained", return_value=Mock()) as pipeline_loader:
+        PyannoteDiarizer(auth_token="mock_token", diarization_model="legacy-3.1")
+
+    pipeline_loader.assert_called_once_with(
+        DIARIZATION_MODELS["legacy-3.1"]["checkpoint"],
+        use_auth_token="mock_token",
+    )
+
+
+def test_pyannote_diarizer_blocks_community_model_on_old_pyannote():
+    with patch(
+        "clipsai.diarize.pyannote.get_pyannote_audio_major_version",
+        return_value=3,
+    ):
+        with pytest.raises(RuntimeError, match="requires pyannote.audio 4.x"):
+            PyannoteDiarizer(auth_token="mock_token", diarization_model="community-1")
 
 
 @pytest.mark.parametrize(
@@ -156,3 +218,53 @@ def test_diarize(mock_diarizer, mock_audio_file, annotation_data, expected_outpu
     output_segments = mock_diarizer.diarize(mock_audio_file)
 
     assert output_segments == expected_output
+
+
+def test_diarize_passes_speaker_count_kwargs_and_writes_raw_output(
+    mock_diarizer,
+    mock_audio_file,
+    tmp_path,
+):
+    raw_output_path = tmp_path / "raw-diarization.json"
+    df = pd.DataFrame(
+        [
+            {"segment": Segment(0, 10), "label": "speaker_0", "track": "_"},
+            {"segment": Segment(10, 20), "label": "speaker_1", "track": "_"},
+        ]
+    )
+    annotation = Annotation().from_df(df)
+    mock_diarizer.pipeline.return_value = annotation
+
+    output_segments = mock_diarizer.diarize(
+        mock_audio_file,
+        num_speakers=2,
+        raw_output_path=raw_output_path,
+    )
+
+    mock_diarizer.pipeline.assert_called_once_with(mock_audio_file.path, num_speakers=2)
+    assert output_segments == [
+        {"speakers": [0], "start_time": 0, "end_time": 10},
+        {"speakers": [1], "start_time": 10, "end_time": 30},
+    ]
+    saved_payload = json.loads(raw_output_path.read_text(encoding="utf-8"))
+    assert saved_payload["model_name"] == "legacy-3.1"
+    assert saved_payload["speaker_count_constraints"] == {"num_speakers": 2}
+    assert len(saved_payload["speaker_diarization"]) == 2
+
+
+def test_serialize_annotation_returns_plain_rows():
+    df = pd.DataFrame(
+        [{"segment": Segment(0, 1.23456), "label": "speaker_0", "track": "_"}]
+    )
+    annotation = Annotation().from_df(df)
+
+    serialized = serialize_annotation(annotation, time_precision=3)
+
+    assert serialized == [
+        {
+            "speaker_label": "speaker_0",
+            "track": "_",
+            "start_time": 0,
+            "end_time": 1.235,
+        }
+    ]

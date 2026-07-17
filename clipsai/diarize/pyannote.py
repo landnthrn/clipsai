@@ -1,5 +1,5 @@
 """
-Diarize an audio file using pyannote/speaker-diarization-3.1
+Diarize an audio file using supported pyannote speaker diarization pipelines.
 
 Notes
 -----
@@ -7,24 +7,29 @@ Notes
 inference part) and one Intel Cascade Lake 6248 CPU (for the clustering part).
 In other words, it takes approximately 1.5 minutes to process a one hour conversation.
 
-- The technical details of the model are described in
- https://huggingface.co/pyannote/speaker-diarization-3.0
+- The legacy model details are described in
+ https://huggingface.co/pyannote/speaker-diarization-3.1
 
-- pyannote/speaker-diarization allows setting a number of speakers to detect. Could be
-viable to analyze different subsections of the video, detect the number of faces, and
-use that as the number of speakers to detect.
+- pyannote speaker diarization pipelines allow setting an exact or bounded number of
+speakers to detect.
 """
 # standard library imports
+from datetime import datetime
+import json
 import logging
 import os
+from pathlib import Path
 import sys
 import uuid
 
 # local package imports
+from .config import DEFAULT_DIARIZATION_MODEL
+from .config import get_diarization_model_config
 from clipsai.media.audio_file import AudioFile
 from clipsai.utils.pytorch import get_compute_device, assert_compute_device_available
 
 # third party imports
+import pyannote.audio
 from pyannote.audio import Pipeline
 from pyannote.core.annotation import Annotation
 import torch
@@ -65,12 +70,126 @@ def _patch_speechbrain_lazy_modules(module_map: dict | None = None) -> int:
     return patched
 
 
+def get_pyannote_audio_major_version(version_text: str | None = None) -> int:
+    """
+    Return the installed pyannote.audio major version number.
+    """
+    version_text = version_text or pyannote.audio.__version__
+    return int(str(version_text).split(".")[0])
+
+
+def build_pipeline_auth_kwargs(auth_token: str) -> dict:
+    """
+    Return the correct authentication keyword for the installed pyannote version.
+    """
+    if get_pyannote_audio_major_version() >= 4:
+        return {"token": auth_token}
+    return {"use_auth_token": auth_token}
+
+
+def build_speaker_count_kwargs(
+    num_speakers: int | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
+) -> dict:
+    """
+    Validate and return supported pyannote speaker-count kwargs.
+    """
+    for field_name, value in (
+        ("num_speakers", num_speakers),
+        ("min_speakers", min_speakers),
+        ("max_speakers", max_speakers),
+    ):
+        if value is not None and int(value) < 1:
+            raise ValueError(f"{field_name} must be at least 1 when provided.")
+
+    if num_speakers is not None and (
+        min_speakers is not None or max_speakers is not None
+    ):
+        raise ValueError(
+            "num_speakers cannot be combined with min_speakers or max_speakers."
+        )
+
+    if (
+        min_speakers is not None
+        and max_speakers is not None
+        and int(min_speakers) > int(max_speakers)
+    ):
+        raise ValueError("min_speakers cannot be greater than max_speakers.")
+
+    speaker_count_kwargs = {}
+    if num_speakers is not None:
+        speaker_count_kwargs["num_speakers"] = int(num_speakers)
+    if min_speakers is not None:
+        speaker_count_kwargs["min_speakers"] = int(min_speakers)
+    if max_speakers is not None:
+        speaker_count_kwargs["max_speakers"] = int(max_speakers)
+    return speaker_count_kwargs
+
+
+def extract_diarization_annotations(
+    pipeline_output,
+) -> tuple[Annotation, Annotation | None]:
+    """
+    Support both legacy Annotation outputs and newer wrapper-style outputs.
+    """
+    if isinstance(pipeline_output, Annotation):
+        return pipeline_output, None
+
+    regular_annotation = getattr(pipeline_output, "speaker_diarization", None)
+    exclusive_annotation = getattr(pipeline_output, "exclusive_speaker_diarization", None)
+    if isinstance(regular_annotation, Annotation):
+        return regular_annotation, exclusive_annotation
+
+    raise TypeError(
+        "Unsupported pyannote pipeline output type. Expected an Annotation or an "
+        "object with a speaker_diarization Annotation."
+    )
+
+
+def serialize_annotation(annotation: Annotation | None, time_precision: int) -> list[dict] | None:
+    """
+    Convert a pyannote Annotation into plain JSON-safe rows.
+    """
+    if annotation is None:
+        return None
+
+    serialized_segments = []
+    for segment, track, speaker_label in annotation.itertracks(yield_label=True):
+        serialized_segments.append(
+            {
+                "speaker_label": str(speaker_label),
+                "track": str(track),
+                "start_time": round(segment.start, time_precision),
+                "end_time": round(segment.end, time_precision),
+            }
+        )
+    return serialized_segments
+
+
+def write_raw_diarization_payload(output_path: str | Path, payload: dict) -> Path:
+    """
+    Write raw diarization output JSON to disk.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as file_object:
+        json.dump(payload, file_object, indent=2)
+        file_object.write("\n")
+    return output_path
+
+
 class PyannoteDiarizer:
     """
-    A class for diarizing audio files using pyannote.
+    A class for diarizing audio files using supported pyannote pipelines.
     """
 
-    def __init__(self, auth_token: str, device: str = None) -> None:
+    def __init__(
+        self,
+        auth_token: str,
+        device: str = None,
+        diarization_model: str = DEFAULT_DIARIZATION_MODEL,
+    ) -> None:
         """
         Initialize PyannoteDiarizer
 
@@ -81,6 +200,8 @@ class PyannoteDiarizer:
         device: str
             PyTorch device to perform computations on. Ex: 'cpu', 'cuda'. Default is
             None (auto detects the correct device)
+        diarization_model: str
+            Which supported diarization pipeline should be loaded.
 
         Returns
         -------
@@ -90,18 +211,38 @@ class PyannoteDiarizer:
             device = get_compute_device()
         assert_compute_device_available(device)
         _patch_speechbrain_lazy_modules()
+        self.model_name = diarization_model
+        self.model_config = get_diarization_model_config(diarization_model)
+        self.pipeline_checkpoint = self.model_config["checkpoint"]
+
+        installed_pyannote_major = get_pyannote_audio_major_version()
+        required_pyannote_major = self.model_config["minimum_pyannote_audio_major"]
+        if installed_pyannote_major < required_pyannote_major:
+            raise RuntimeError(
+                f"Diarization model '{diarization_model}' requires pyannote.audio "
+                f"{required_pyannote_major}.x or newer, but this environment has "
+                f"{pyannote.audio.__version__}."
+            )
 
         self.pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            use_auth_token=auth_token,
+            self.pipeline_checkpoint,
+            **build_pipeline_auth_kwargs(auth_token),
         ).to(torch.device(device))
-        logging.debug("Pyannote using device: {}".format(self.pipeline.device))
+        logging.debug(
+            "Pyannote using device: {} with model '{}' ({})".format(
+                self.pipeline.device, self.model_name, self.pipeline_checkpoint
+            )
+        )
 
     def diarize(
         self,
         audio_file: AudioFile,
         min_segment_duration: float = 1.5,
         time_precision: int = 6,
+        num_speakers: int | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
+        raw_output_path: str | Path | None = None,
     ) -> list[dict]:
         """
         Diarizes the audio file.
@@ -126,9 +267,16 @@ class PyannoteDiarizer:
             end_time: float
                 end time of the segment in seconds
         """
+        speaker_count_kwargs = build_speaker_count_kwargs(
+            num_speakers=num_speakers,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+        created_temp_wav = False
         if audio_file.has_file_extension("wav"):
             wav_file = audio_file
         else:
+            created_temp_wav = True
             wav_file_path = os.path.join(
                 audio_file.get_parent_dir_path(),
                 "{}{}.wav".format(
@@ -141,16 +289,41 @@ class PyannoteDiarizer:
                 overwrite=False,
             )
 
-        pyannote_segments: Annotation = self.pipeline({"audio": wav_file.path})
+        try:
+            pipeline_output = self.pipeline(wav_file.path, **speaker_count_kwargs)
+            pyannote_segments, exclusive_speaker_diarization = extract_diarization_annotations(
+                pipeline_output
+            )
 
-        adjusted_speaker_segments = self._adjust_segments(
-            pyannote_segments=pyannote_segments,
-            min_segment_duration=min_segment_duration,
-            duration=audio_file.get_duration(),
-            time_precision=time_precision,
-        )
+            if raw_output_path is not None:
+                raw_payload = {
+                    "created_at": datetime.now().strftime("%m/%d/%Y %I:%M %p"),
+                    "model_name": self.model_name,
+                    "pipeline_checkpoint": self.pipeline_checkpoint,
+                    "pyannote_audio_version": pyannote.audio.__version__,
+                    "source_path": str(audio_file.path),
+                    "analyzed_audio_path": str(wav_file.path),
+                    "speaker_count_constraints": speaker_count_kwargs,
+                    "speaker_diarization": serialize_annotation(
+                        pyannote_segments,
+                        time_precision,
+                    ),
+                    "exclusive_speaker_diarization": serialize_annotation(
+                        exclusive_speaker_diarization,
+                        time_precision,
+                    ),
+                }
+                write_raw_diarization_payload(raw_output_path, raw_payload)
 
-        wav_file.delete()
+            adjusted_speaker_segments = self._adjust_segments(
+                pyannote_segments=pyannote_segments,
+                min_segment_duration=min_segment_duration,
+                duration=audio_file.get_duration(),
+                time_precision=time_precision,
+            )
+        finally:
+            if created_temp_wav:
+                wav_file.delete()
 
         return adjusted_speaker_segments
 
@@ -261,7 +434,7 @@ class PyannoteDiarizer:
 
     def _relabel_speakers(
         self, speaker_segments: list[dict], unique_speakers: set[int]
-    ) -> dict[int, int]:
+    ) -> list[dict]:
         """
         Relabels speaker segments so that the speaker labels are contiguous.
 

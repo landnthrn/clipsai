@@ -10,6 +10,7 @@ from .resizer import Resizer
 from .vid_proc import detect_scenes
 
 # local package imports
+from clipsai.diarize.config import DEFAULT_DIARIZATION_MODEL
 from clipsai.diarize.pyannote import PyannoteDiarizer
 from clipsai.media.audiovideo_file import AudioVideoFile
 
@@ -27,6 +28,11 @@ def resize(
     min_scene_duration: float = 0.25,
     scene_merge_threshold: float = 0.25,
     time_precision: int = 6,
+    diarization_model: str = DEFAULT_DIARIZATION_MODEL,
+    num_speakers: int | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
+    raw_diarization_output_path: str | None = None,
     device: str = None,
 ) -> Crops:
     """
@@ -60,6 +66,16 @@ def resize(
         Threshold in seconds for merging scene changes with speaker segments.
     time_precision: int
         Precision (number of decimal places) for start and end times in diarization.
+    diarization_model: str
+        Which supported pyannote diarization pipeline should be used.
+    num_speakers: int
+        Exact speaker count to force during diarization.
+    min_speakers: int
+        Lower bound on the speaker count during diarization.
+    max_speakers: int
+        Upper bound on the speaker count during diarization.
+    raw_diarization_output_path: str
+        Optional path where raw pyannote diarization output JSON should be written.
     device: str
         PyTorch device to perform computations on. Ex: 'cpu', 'cuda'. Default is None
         (auto detects the correct device)
@@ -74,8 +90,20 @@ def resize(
     media.assert_has_video_stream()
 
     logging.debug("DIARIZING VIDEO ({})".format(media.get_filename()))
-    diarizer = PyannoteDiarizer(auth_token=pyannote_auth_token, device=device)
-    diarized_segments = diarizer.diarize(media, min_segment_duration, time_precision)
+    diarizer = PyannoteDiarizer(
+        auth_token=pyannote_auth_token,
+        device=device,
+        diarization_model=diarization_model,
+    )
+    diarized_segments = diarizer.diarize(
+        media,
+        min_segment_duration,
+        time_precision,
+        num_speakers=num_speakers,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
+        raw_output_path=raw_diarization_output_path,
+    )
 
     logging.debug("DETECTING SCENES IN VIDEO ({})".format(media.get_filename()))
     scene_changes = detect_scenes(media, min_scene_duration)

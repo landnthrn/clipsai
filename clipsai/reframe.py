@@ -12,7 +12,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
-PLAN_VERSION = 2
+from clipsai.diarize.config import DEFAULT_DIARIZATION_MODEL
+from clipsai.diarize.config import get_supported_diarization_models
+
+PLAN_VERSION = 3
 SUPPORTED_VIDEO_EXTENSIONS = {
     ".mp4",
     ".mov",
@@ -35,6 +38,8 @@ DEFAULT_OUTPUT_EXTENSION = ".mp4"
 DEFAULT_OUTPUT_NAME_MODE = "suffix"
 DEFAULT_OUTPUT_SUFFIX = "_vertical"
 DEFAULT_SUMMARY_AND_LOGS_DIRNAME = "summary-and-logs"
+RAW_DIARIZATION_DIRNAME = "raw-diarization"
+RAW_DIARIZATION_FILE_SUFFIX = ".raw-diarization.json"
 
 RENDER_PRESETS = {
     "preview": {
@@ -249,10 +254,15 @@ def build_plan_editing_help() -> dict:
             "crop_width": "Detected crop width from analysis. Usually not meant to be edited.",
             "crop_height": "Detected crop height from analysis. Usually not meant to be edited.",
             "aspect_ratio": "Target crop shape from analysis. Usually not meant to be edited.",
+            "diarization_model": "Analyze-time diarization pipeline choice. Usually not meant to be edited after analysis.",
+            "num_speakers": "Analyze-time exact speaker count. Usually not meant to be edited after analysis.",
+            "min_speakers": "Analyze-time lower speaker-count bound. Usually not meant to be edited after analysis.",
+            "max_speakers": "Analyze-time upper speaker-count bound. Usually not meant to be edited after analysis.",
             "min_segment_duration": "Analyze-time setting used to build this plan. Usually not meant to be edited after analysis.",
             "samples_per_segment": "Analyze-time setting used to build this plan. Usually not meant to be edited after analysis.",
             "face_detect_width": "Analyze-time face-detection size. Usually not meant to be edited after analysis.",
             "scene_merge_threshold": "Analyze-time merge setting. Usually not meant to be edited after analysis.",
+            "raw_diarization_path": "Optional saved raw diarization JSON path from analysis. Usually not meant to be edited.",
         },
         "render": {
             "mode": (
@@ -362,12 +372,18 @@ def normalize_plan_data(plan_data: dict) -> dict:
 
     normalized_plan = dict(plan_data)
     source_path = Path(normalized_plan["source_path"]).expanduser().resolve()
+    analysis_data = dict(normalized_plan.get("analysis", {}))
     render_data = dict(normalized_plan.get("render", {}))
     inferred_output_name_mode, inferred_output_suffix = infer_output_name_settings(
         source_path=source_path,
         render_data=render_data,
     )
 
+    analysis_data.setdefault("diarization_model", DEFAULT_DIARIZATION_MODEL)
+    analysis_data.setdefault("num_speakers", None)
+    analysis_data.setdefault("min_speakers", None)
+    analysis_data.setdefault("max_speakers", None)
+    analysis_data.setdefault("raw_diarization_path", None)
     render_data.setdefault("mode", DEFAULT_RENDER_MODE)
     render_data.setdefault("preset_name", DEFAULT_RENDER_PRESET)
     render_data.setdefault("output_name_mode", inferred_output_name_mode)
@@ -391,6 +407,7 @@ def normalize_plan_data(plan_data: dict) -> dict:
     normalized_plan.setdefault("_editing_help", build_plan_editing_help())
     normalized_plan["source_path"] = str(source_path)
     normalized_plan.setdefault("source_filename", source_path.name)
+    normalized_plan["analysis"] = analysis_data
     normalized_plan["render"] = render_data
     normalized_plan["segments"] = [
         normalize_segment_plan_entry(segment_data=segment, index=index)
@@ -477,6 +494,17 @@ def default_output_path(source_path: Path, output_dir: Path) -> Path:
     Return the default rendered output path for a source video.
     """
     return output_dir / default_output_filename(source_path)
+
+
+def default_raw_diarization_path(video_path: Path, plans_dir: Path) -> Path:
+    """
+    Return the default raw diarization JSON path for one source video.
+    """
+    return (
+        plans_dir
+        / RAW_DIARIZATION_DIRNAME
+        / f"{video_path.stem}{RAW_DIARIZATION_FILE_SUFFIX}"
+    )
 
 
 def store_plan(plan_path: Path, plan_data: dict) -> Path:
@@ -657,6 +685,7 @@ def build_render_summary_markdown(
     source_path: Path,
     output_path: Path,
     summary_path: Path,
+    analysis_data: dict,
     render_settings: dict,
     enabled_segments: list[dict],
     disabled_segments: list[dict],
@@ -664,6 +693,9 @@ def build_render_summary_markdown(
     """
     Build a markdown summary of one render run.
     """
+    def format_optional_value(value, empty_text: str = "not set") -> str:
+        return empty_text if value is None else str(value)
+
     unique_speakers = sorted(
         {
             str(speaker)
@@ -686,6 +718,14 @@ def build_render_summary_markdown(
         f"- Source video: `{source_path}`",
         f"- Rendered output: `{output_path}`",
         f"- Summary file: `{summary_path}`",
+        "",
+        "## Analysis Settings",
+        "",
+        f"- Diarization model: `{analysis_data.get('diarization_model', DEFAULT_DIARIZATION_MODEL)}`",
+        f"- Exact speaker count: `{format_optional_value(analysis_data.get('num_speakers'))}`",
+        f"- Min speakers: `{format_optional_value(analysis_data.get('min_speakers'))}`",
+        f"- Max speakers: `{format_optional_value(analysis_data.get('max_speakers'))}`",
+        f"- Raw diarization path: `{format_optional_value(analysis_data.get('raw_diarization_path'), 'not saved')}`",
         "",
         "## Render Settings",
         "",
@@ -780,6 +820,7 @@ def build_summary_and_logs_payload(
     source_path: Path,
     output_path: Path,
     export_paths: dict[str, Path],
+    analysis_data: dict,
     render_settings: dict,
     enabled_segments: list[dict],
     disabled_segments: list[dict],
@@ -808,6 +849,7 @@ def build_summary_and_logs_payload(
             "full_record_path": str(export_paths["full_record_path"]),
             "timeline_path": str(export_paths["timeline_path"]),
         },
+        "analysis": analysis_data,
         "render": {
             "mode": render_settings["mode"],
             "preset_name": render_settings["preset_name"],
@@ -892,26 +934,49 @@ def analyze_video(
     samples_per_segment: int,
     face_detect_width: int,
     scene_merge_threshold: float,
+    diarization_model: str,
+    num_speakers: int | None,
+    min_speakers: int | None,
+    max_speakers: int | None,
+    save_raw_diarization: bool,
 ) -> Path:
     """
     Analyze one video and write its editable plan JSON.
     """
     from clipsai.resize.resize import resize
 
+    raw_diarization_path = None
+    if save_raw_diarization:
+        raw_diarization_path = default_raw_diarization_path(video_path, plans_dir)
+
     crops = resize(
         video_file_path=str(video_path),
         pyannote_auth_token=hf_token,
         aspect_ratio=DEFAULT_ASPECT_RATIO,
+        diarization_model=diarization_model,
+        num_speakers=num_speakers,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
+        raw_diarization_output_path=(
+            None if raw_diarization_path is None else str(raw_diarization_path)
+        ),
         min_segment_duration=min_segment_duration,
         samples_per_segment=samples_per_segment,
         face_detect_width=face_detect_width,
         scene_merge_threshold=scene_merge_threshold,
     )
     analysis_settings = {
+        "diarization_model": diarization_model,
+        "num_speakers": num_speakers,
+        "min_speakers": min_speakers,
+        "max_speakers": max_speakers,
         "min_segment_duration": min_segment_duration,
         "samples_per_segment": samples_per_segment,
         "face_detect_width": face_detect_width,
         "scene_merge_threshold": scene_merge_threshold,
+        "raw_diarization_path": (
+            None if raw_diarization_path is None else str(raw_diarization_path)
+        ),
     }
     plan_data = build_plan(
         video_path=video_path,
@@ -1012,6 +1077,7 @@ def render_plan(
     render_started_at = render_started_at or datetime.now()
     generated_at = render_started_at.strftime("%m/%d/%Y %I:%M %p")
     output_path = output_dir / render_settings["output_name"]
+    analysis_data = plan_data["analysis"]
     export_paths = build_summary_and_logs_paths(
         source_path=source_path,
         output_dir=output_dir,
@@ -1123,6 +1189,7 @@ def render_plan(
             source_path=source_path,
             output_path=output_path,
             summary_path=export_paths["summary_path"],
+            analysis_data=analysis_data,
             render_settings=render_settings,
             enabled_segments=enabled_segments,
             disabled_segments=disabled_segments,
@@ -1137,6 +1204,7 @@ def render_plan(
             source_path=source_path,
             output_path=output_path,
             export_paths=export_paths,
+            analysis_data=analysis_data,
             render_settings=render_settings,
             enabled_segments=enabled_segments,
             disabled_segments=disabled_segments,
@@ -1174,6 +1242,11 @@ def analyze_command(args: argparse.Namespace) -> int:
             samples_per_segment=args.samples_per_segment,
             face_detect_width=args.face_detect_width,
             scene_merge_threshold=args.scene_merge_threshold,
+            diarization_model=args.diarization_model,
+            num_speakers=args.num_speakers,
+            min_speakers=args.min_speakers,
+            max_speakers=args.max_speakers,
+            save_raw_diarization=args.save_raw_diarization,
         )
         print(f"Created plan: {plan_path}")
     return 0
@@ -1286,6 +1359,30 @@ def build_parser() -> argparse.ArgumentParser:
             help="Minimum speaker segment duration in seconds.",
         )
         subparser.add_argument(
+            "--diarization-model",
+            choices=get_supported_diarization_models(),
+            default=DEFAULT_DIARIZATION_MODEL,
+            help="Which supported pyannote diarization pipeline to use during analysis.",
+        )
+        subparser.add_argument(
+            "--num-speakers",
+            type=int,
+            default=None,
+            help="Exact number of speakers to force during diarization.",
+        )
+        subparser.add_argument(
+            "--min-speakers",
+            type=int,
+            default=None,
+            help="Lower speaker-count bound during diarization.",
+        )
+        subparser.add_argument(
+            "--max-speakers",
+            type=int,
+            default=None,
+            help="Upper speaker-count bound during diarization.",
+        )
+        subparser.add_argument(
             "--samples-per-segment",
             type=int,
             default=DEFAULT_SAMPLES_PER_SEGMENT,
@@ -1302,6 +1399,12 @@ def build_parser() -> argparse.ArgumentParser:
             type=float,
             default=DEFAULT_SCENE_MERGE_THRESHOLD,
             help="Seconds used when aligning scene boundaries to speaker segments.",
+        )
+        subparser.add_argument(
+            "--save-raw-diarization",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help="Whether raw pyannote diarization JSON should be saved next to the plans.",
         )
 
     analyze_parser = subparsers.add_parser(

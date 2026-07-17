@@ -8,6 +8,7 @@ from clipsai.reframe import build_render_media_file, build_render_summary_markdo
 from clipsai.reframe import build_summary_and_logs_batch_root
 from clipsai.reframe import build_summary_and_logs_payload, build_timeline_csv_rows
 from clipsai.reframe import create_crops_from_plan, default_output_path, default_plan_path
+from clipsai.reframe import default_raw_diarization_path
 from clipsai.reframe import discover_plan_files, discover_video_files
 from clipsai.reframe import format_summary_and_logs_timestamp, get_enabled_segments
 from clipsai.reframe import load_plan
@@ -60,13 +61,22 @@ def test_build_plan_contains_expected_shape(tmp_path: Path):
         output_width=1080,
         output_height=1920,
         render_preset="high",
-        analysis_settings={"min_segment_duration": 0.75},
+        analysis_settings={
+            "diarization_model": "legacy-3.1",
+            "num_speakers": None,
+            "min_speakers": None,
+            "max_speakers": None,
+            "min_segment_duration": 0.75,
+            "raw_diarization_path": None,
+        },
     )
 
     assert plan["plan_version"] == PLAN_VERSION
     assert "_editing_help" in plan
     assert plan["source_filename"] == "podcast.mp4"
     assert plan["analysis"]["crop_width"] == 608
+    assert plan["analysis"]["diarization_model"] == "legacy-3.1"
+    assert plan["analysis"]["raw_diarization_path"] is None
     assert plan["render"]["mode"] == "preset"
     assert plan["render"]["preset_name"] == "high"
     assert plan["render"]["output_name_mode"] == "suffix"
@@ -84,9 +94,11 @@ def test_default_paths(tmp_path: Path):
     source_path = tmp_path / "episode01.mp4"
     plan_path = default_plan_path(source_path, tmp_path / "plans")
     output_path = default_output_path(source_path, tmp_path / "output")
+    raw_diarization_path = default_raw_diarization_path(source_path, tmp_path / "plans")
 
     assert plan_path.name == f"episode01{PLAN_FILE_SUFFIX}"
     assert output_path.name == "episode01_vertical.mp4"
+    assert raw_diarization_path.name == "episode01.raw-diarization.json"
 
 
 def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
@@ -128,6 +140,11 @@ def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
     assert normalized["plan_version"] == PLAN_VERSION
     assert "_editing_help" in normalized
     assert normalized["source_filename"] == "episode01.mp4"
+    assert normalized["analysis"]["diarization_model"] == "legacy-3.1"
+    assert normalized["analysis"]["num_speakers"] is None
+    assert normalized["analysis"]["min_speakers"] is None
+    assert normalized["analysis"]["max_speakers"] is None
+    assert normalized["analysis"]["raw_diarization_path"] is None
     assert normalized["render"]["mode"] == "preset"
     assert normalized["render"]["output_name_mode"] == "suffix"
     assert normalized["render"]["output_suffix"] == "_vertical"
@@ -382,6 +399,13 @@ def test_build_render_summary_markdown_contains_core_details(tmp_path: Path):
         source_path=source_path,
         output_path=output_path,
         summary_path=summary_path,
+        analysis_data={
+            "diarization_model": "community-1",
+            "num_speakers": None,
+            "min_speakers": 2,
+            "max_speakers": 4,
+            "raw_diarization_path": "plans/raw-diarization/episode01.raw-diarization.json",
+        },
         render_settings=render_settings,
         enabled_segments=enabled_segments,
         disabled_segments=disabled_segments,
@@ -390,6 +414,8 @@ def test_build_render_summary_markdown_contains_core_details(tmp_path: Path):
     assert "# Render Summary" in summary_markdown
     assert "Created: 07/16/2026 02:30 AM" in summary_markdown
     assert "Rendered output" in summary_markdown
+    assert "Diarization model: `community-1`" in summary_markdown
+    assert "Min speakers: `2`" in summary_markdown
     assert "Output size: `1080x1920`" in summary_markdown
     assert "Enabled segments rendered: `2`" in summary_markdown
     assert "Detected speaker count: `0`" in summary_markdown
@@ -500,6 +526,13 @@ def test_build_summary_and_logs_payload_contains_file_render_and_segment_details
         source_path=tmp_path / "episode01.mp4",
         output_path=tmp_path / "output" / "episode01_vertical.mp4",
         export_paths=export_paths,
+        analysis_data={
+            "diarization_model": "legacy-3.1",
+            "num_speakers": 2,
+            "min_speakers": None,
+            "max_speakers": None,
+            "raw_diarization_path": "plans/raw-diarization/episode01.raw-diarization.json",
+        },
         render_settings=render_settings,
         enabled_segments=enabled_segments,
         disabled_segments=disabled_segments,
@@ -508,6 +541,7 @@ def test_build_summary_and_logs_payload_contains_file_render_and_segment_details
     assert payload["created_at"] == "07/16/2026 06:32 PM"
     assert payload["files"]["timeline_path"].endswith("timeline.csv")
     assert payload["files"]["full_record_path"].endswith("full-record.json")
+    assert payload["analysis"]["num_speakers"] == 2
     assert payload["render"]["output_name"] == "episode01_vertical.mp4"
     assert payload["segments"]["enabled_count"] == 1
     assert payload["segments"]["disabled_count"] == 1

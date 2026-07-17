@@ -52,7 +52,7 @@ print("EndTime: ", clips[0].end_time)
 
 ### Resizing a video
 
-A hugging face access token is required to resize a video since [Pyannote](https://github.com/pyannote/pyannote-audio) is utilized for speaker diarization. You won't be charged for using Pyannote and instructions are on the [Pyannote HuggingFace ](https://huggingface.co/pyannote/speaker-diarization-3.0#requirements) page. For resizing the original video to the desired aspect ratio, refer to the resizing reference.
+A Hugging Face access token is required to resize a video since [Pyannote](https://github.com/pyannote/pyannote-audio) is utilized for speaker diarization. You won't be charged for using Pyannote and instructions are on the [Pyannote speaker-diarization-3.1 page](https://huggingface.co/pyannote/speaker-diarization-3.1#requirements). For resizing the original video to the desired aspect ratio, refer to the resizing reference.
 
 ```python
 from clipsai import resize
@@ -80,7 +80,8 @@ Each plan now stores:
 - segment IDs for easier manual reference
 - an `enabled` switch per segment so you can skip sections without deleting them
 - a `notes` field per segment
-- render settings such as preset/custom mode, naming mode, suffix, size, overwrite behavior, and optional markdown summary export
+- analysis settings such as diarization model, optional speaker-count constraints, and optional raw diarization save path
+- render settings such as preset/custom mode, naming mode, suffix, size, overwrite behavior, and optional summary/logs export
 
 Analyze only:
 
@@ -98,6 +99,18 @@ Analyze with a custom suffix:
 
 ```bash
 clipsai-reframe analyze --input "/abs/path/to/videos" --plans-dir "plans" --output-name-mode suffix --output-suffix "_social-cut"
+```
+
+Analyze with a specific diarization model:
+
+```bash
+clipsai-reframe analyze --input "/abs/path/to/videos" --plans-dir "plans" --diarization-model legacy-3.1
+```
+
+Analyze with speaker-count guidance plus raw diarization JSON saving:
+
+```bash
+clipsai-reframe analyze --input "/abs/path/to/videos" --plans-dir "plans" --min-speakers 2 --max-speakers 4 --save-raw-diarization
 ```
 
 Render only:
@@ -142,16 +155,28 @@ Example render naming fields:
   },
   "output_name_mode": "suffix",
   "output_suffix": "_vertical",
-  "export_summary_markdown": false,
+  "output_summary_and_logs": true,
   "overwrite": true
 }
 ```
 
-If `export_summary_markdown` is set to `true`, render also writes a markdown summary next to the video output with:
+If `output_summary_and_logs` is set to `true`, render writes a per-video folder under `output/summary-and-logs/` with:
+
+- `summary.md`
+- `full-record.json`
+- `timeline.csv`
+
+The summary markdown includes:
 
 - a created timestamp
 - the plan path
 - the source path
 - the rendered output path
+- the analysis settings used
 - the render settings used
-- a short enabled versus disabled segment summary
+- the enabled versus disabled segment summary
+- an exact per-cut timeline with decimal start, end, and duration values
+
+The analyze step can also save raw pyannote diarization JSON under `plans/raw-diarization/` when `--save-raw-diarization` is enabled.
+
+> **Note:** This repo's current tested local environment uses `pyannote.audio 3.1.1`, so `legacy-3.1` remains the default runnable model there. `community-1` support is built into the code path, but actually using it requires a `pyannote.audio 4.x` environment plus the required Hugging Face access.
