@@ -1,28 +1,17 @@
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from clipsai.reframe import PLAN_FILE_SUFFIX
-from clipsai.reframe import PLAN_VERSION
-from clipsai.reframe import build_plan
-from clipsai.reframe import build_result_debug_batch_root
-from clipsai.reframe import build_result_debug_payload
-from clipsai.reframe import build_render_media_file
-from clipsai.reframe import build_render_summary_markdown
-from clipsai.reframe import build_timeline_csv_rows
-from clipsai.reframe import create_crops_from_plan
-from clipsai.reframe import default_summary_path
-from clipsai.reframe import default_output_path
-from clipsai.reframe import default_plan_path
-from clipsai.reframe import discover_plan_files
-from clipsai.reframe import discover_video_files
-from clipsai.reframe import format_result_debug_timestamp
-from clipsai.reframe import get_enabled_segments
-from clipsai.reframe import normalize_plan_data
-from clipsai.reframe import original_output_filename
-from clipsai.reframe import resolve_output_filename
-from clipsai.reframe import resolve_render_settings
-from datetime import datetime
+from clipsai.reframe import PLAN_FILE_SUFFIX, PLAN_VERSION, build_plan
+from clipsai.reframe import build_render_media_file, build_render_summary_markdown
+from clipsai.reframe import build_summary_and_logs_batch_root
+from clipsai.reframe import build_summary_and_logs_payload, build_timeline_csv_rows
+from clipsai.reframe import create_crops_from_plan, default_output_path, default_plan_path
+from clipsai.reframe import discover_plan_files, discover_video_files
+from clipsai.reframe import format_summary_and_logs_timestamp, get_enabled_segments
+from clipsai.reframe import normalize_plan_data, original_output_filename
+from clipsai.reframe import resolve_output_filename, resolve_render_settings
 from clipsai.resize.crops import Crops
 from clipsai.resize.segment import Segment
 
@@ -81,8 +70,7 @@ def test_build_plan_contains_expected_shape(tmp_path: Path):
     assert plan["render"]["preset_name"] == "high"
     assert plan["render"]["output_name_mode"] == "suffix"
     assert plan["render"]["output_suffix"] == "_vertical"
-    assert plan["render"]["export_summary_markdown"] is False
-    assert plan["render"]["export_result_debug"] is False
+    assert plan["render"]["output_summary_and_logs"] is False
     assert "output_name" not in plan["render"]
     assert plan["segments"][0]["segment_id"] == "segment_0001"
     assert plan["segments"][0]["enabled"] is True
@@ -95,11 +83,9 @@ def test_default_paths(tmp_path: Path):
     source_path = tmp_path / "episode01.mp4"
     plan_path = default_plan_path(source_path, tmp_path / "plans")
     output_path = default_output_path(source_path, tmp_path / "output")
-    summary_path = default_summary_path(output_path)
 
     assert plan_path.name == f"episode01{PLAN_FILE_SUFFIX}"
     assert output_path.name == "episode01_vertical.mp4"
-    assert summary_path.name == "episode01_vertical_summary.md"
 
 
 def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
@@ -145,8 +131,9 @@ def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
     assert normalized["render"]["output_name_mode"] == "suffix"
     assert normalized["render"]["output_suffix"] == "_vertical"
     assert normalized["render"]["overwrite"] is True
-    assert normalized["render"]["export_summary_markdown"] is True
-    assert normalized["render"]["export_result_debug"] is False
+    assert normalized["render"]["output_summary_and_logs"] is True
+    assert "export_summary_markdown" not in normalized["render"]
+    assert "export_result_debug" not in normalized["render"]
     assert normalized["segments"][0]["segment_id"] == "segment_0001"
     assert normalized["segments"][0]["enabled"] is True
     assert normalized["segments"][0]["notes"] == ""
@@ -269,8 +256,7 @@ def test_resolve_render_settings_uses_cli_preset_override(tmp_path: Path):
             "output_width": 1080,
             "output_height": 1920,
             "overwrite": True,
-            "export_summary_markdown": True,
-            "export_result_debug": True,
+            "output_summary_and_logs": True,
         },
     }
 
@@ -289,8 +275,7 @@ def test_resolve_render_settings_uses_cli_preset_override(tmp_path: Path):
     assert render_settings["output_width"] == 720
     assert render_settings["output_height"] == 1280
     assert render_settings["overwrite"] is False
-    assert render_settings["export_summary_markdown"] is True
-    assert render_settings["export_result_debug"] is True
+    assert render_settings["output_summary_and_logs"] is True
     assert render_settings["output_name_mode"] == "suffix"
     assert render_settings["output_suffix"] == "_vertical"
     assert render_settings["output_name"] == "episode01_vertical.mp4"
@@ -308,8 +293,7 @@ def test_resolve_render_settings_supports_custom_mode(tmp_path: Path):
             "output_width": 1080,
             "output_height": 1920,
             "overwrite": True,
-            "export_summary_markdown": False,
-            "export_result_debug": True,
+            "output_summary_and_logs": True,
             "video_codec": "libx264",
             "audio_codec": "aac",
             "audio_bitrate": "256k",
@@ -325,7 +309,7 @@ def test_resolve_render_settings_supports_custom_mode(tmp_path: Path):
     assert render_settings["video_codec"] == "libx264"
     assert render_settings["audio_bitrate"] == "256k"
     assert render_settings["crf"] == "16"
-    assert render_settings["export_result_debug"] is True
+    assert render_settings["output_summary_and_logs"] is True
     assert render_settings["output_name"] == "episode01_manual-test.mp4"
 
 
@@ -333,7 +317,7 @@ def test_build_render_summary_markdown_contains_core_details(tmp_path: Path):
     plan_path = tmp_path / f"episode01{PLAN_FILE_SUFFIX}"
     source_path = tmp_path / "episode01.mp4"
     output_path = tmp_path / "episode01_vertical.mp4"
-    summary_path = tmp_path / "episode01_vertical_summary.md"
+    summary_path = tmp_path / "summary-and-logs" / "episode01" / "summary.md"
     render_settings = {
         "mode": "preset",
         "preset_name": "preview",
@@ -351,7 +335,9 @@ def test_build_render_summary_markdown_contains_core_details(tmp_path: Path):
         {"segment_id": "segment_0001", "start_time": 0.0, "end_time": 5.5},
         {"segment_id": "segment_0002", "start_time": 5.5, "end_time": 12.0},
     ]
-    disabled_segments = [{"segment_id": "segment_0003"}]
+    disabled_segments = [
+        {"segment_id": "segment_0003", "start_time": 12.0, "end_time": 14.0}
+    ]
 
     summary_markdown = build_render_summary_markdown(
         generated_at="07/16/2026 02:30 AM",
@@ -369,22 +355,27 @@ def test_build_render_summary_markdown_contains_core_details(tmp_path: Path):
     assert "Rendered output" in summary_markdown
     assert "Output size: `1080x1920`" in summary_markdown
     assert "Enabled segments rendered: `2`" in summary_markdown
+    assert "Detected speaker count: `0`" in summary_markdown
+    assert "| segment_0001 | enabled | 0.000000 | 5.500000 | 5.500000 | - |  |  | - |" in summary_markdown
 
 
-def test_format_result_debug_timestamp_uses_windows_safe_layout():
-    formatted = format_result_debug_timestamp(datetime(2026, 7, 16, 18, 32))
+def test_format_summary_and_logs_timestamp_uses_windows_safe_layout():
+    formatted = format_summary_and_logs_timestamp(datetime(2026, 7, 16, 18, 32))
 
-    assert formatted == "6-32PM_0716"
+    assert formatted == "6-32PM_07-16"
 
 
-def test_build_result_debug_batch_root_uses_batch_label_and_timestamp(tmp_path: Path):
-    batch_root = build_result_debug_batch_root(
+def test_build_summary_and_logs_batch_root_uses_batch_label_and_timestamp(tmp_path: Path):
+    batch_root = build_summary_and_logs_batch_root(
         output_dir=tmp_path / "output",
         batch_label="Podcast EP2",
         now=datetime(2026, 7, 16, 18, 32),
     )
 
-    assert batch_root == tmp_path / "output" / "debug" / "Podcast EP2_6-32PM_0716"
+    assert (
+        batch_root
+        == tmp_path / "output" / "summary-and-logs" / "Podcast EP2_6-32PM_07-16"
+    )
 
 
 def test_build_timeline_csv_rows_marks_enabled_and_disabled_segments():
@@ -420,12 +411,14 @@ def test_build_timeline_csv_rows_marks_enabled_and_disabled_segments():
     assert rows[1]["notes"] == "skip"
 
 
-def test_build_result_debug_payload_contains_file_render_and_segment_details(tmp_path: Path):
-    debug_paths = {
-        "video_root": tmp_path / "debug" / "episode01",
-        "summary_path": tmp_path / "debug" / "episode01" / "summary.md",
-        "details_path": tmp_path / "debug" / "episode01" / "details.json",
-        "timeline_path": tmp_path / "debug" / "episode01" / "timeline.csv",
+def test_build_summary_and_logs_payload_contains_file_render_and_segment_details(tmp_path: Path):
+    export_paths = {
+        "video_root": tmp_path / "summary-and-logs" / "episode01",
+        "summary_path": tmp_path / "summary-and-logs" / "episode01" / "summary.md",
+        "full_record_path": (
+            tmp_path / "summary-and-logs" / "episode01" / "full-record.json"
+        ),
+        "timeline_path": tmp_path / "summary-and-logs" / "episode01" / "timeline.csv",
     }
     render_settings = {
         "mode": "preset",
@@ -464,12 +457,12 @@ def test_build_result_debug_payload_contains_file_render_and_segment_details(tmp
         }
     ]
 
-    payload = build_result_debug_payload(
+    payload = build_summary_and_logs_payload(
         generated_at="07/16/2026 06:32 PM",
         plan_path=tmp_path / f"episode01{PLAN_FILE_SUFFIX}",
         source_path=tmp_path / "episode01.mp4",
         output_path=tmp_path / "output" / "episode01_vertical.mp4",
-        debug_paths=debug_paths,
+        export_paths=export_paths,
         render_settings=render_settings,
         enabled_segments=enabled_segments,
         disabled_segments=disabled_segments,
@@ -477,6 +470,7 @@ def test_build_result_debug_payload_contains_file_render_and_segment_details(tmp
 
     assert payload["created_at"] == "07/16/2026 06:32 PM"
     assert payload["files"]["timeline_path"].endswith("timeline.csv")
+    assert payload["files"]["full_record_path"].endswith("full-record.json")
     assert payload["render"]["output_name"] == "episode01_vertical.mp4"
     assert payload["segments"]["enabled_count"] == 1
     assert payload["segments"]["disabled_count"] == 1
