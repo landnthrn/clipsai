@@ -223,7 +223,7 @@ def build_render_plan_entry(
         "output_width": output_width,
         "output_height": output_height,
         "overwrite": True,
-        "output_summary_and_logs": False,
+        "output_summary_and_logs": True,
         **RENDER_PRESETS[render_preset],
     }
     return {
@@ -495,7 +495,11 @@ def load_plan(plan_path: Path) -> dict:
     Read a plan JSON file from disk.
     """
     with plan_path.open("r", encoding="utf-8") as file_object:
-        return validate_plan_data(normalize_plan_data(json.load(file_object)))
+        raw_plan_data = json.load(file_object)
+    normalized_plan_data = validate_plan_data(normalize_plan_data(raw_plan_data))
+    if normalized_plan_data != raw_plan_data:
+        store_plan(plan_path, normalized_plan_data)
+    return normalized_plan_data
 
 
 def resolve_render_settings(

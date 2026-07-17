@@ -10,6 +10,7 @@ from clipsai.reframe import build_summary_and_logs_payload, build_timeline_csv_r
 from clipsai.reframe import create_crops_from_plan, default_output_path, default_plan_path
 from clipsai.reframe import discover_plan_files, discover_video_files
 from clipsai.reframe import format_summary_and_logs_timestamp, get_enabled_segments
+from clipsai.reframe import load_plan
 from clipsai.reframe import normalize_plan_data, original_output_filename
 from clipsai.reframe import resolve_output_filename, resolve_render_settings
 from clipsai.resize.crops import Crops
@@ -70,7 +71,7 @@ def test_build_plan_contains_expected_shape(tmp_path: Path):
     assert plan["render"]["preset_name"] == "high"
     assert plan["render"]["output_name_mode"] == "suffix"
     assert plan["render"]["output_suffix"] == "_vertical"
-    assert plan["render"]["output_summary_and_logs"] is False
+    assert plan["render"]["output_summary_and_logs"] is True
     assert "output_name" not in plan["render"]
     assert plan["segments"][0]["segment_id"] == "segment_0001"
     assert plan["segments"][0]["enabled"] is True
@@ -169,6 +170,42 @@ def test_normalize_plan_data_infers_keep_original_output_mode(tmp_path: Path):
 
     assert normalized["render"]["output_name_mode"] == "keep_original"
     assert normalized["render"]["output_suffix"] == ""
+
+
+def test_load_plan_rewrites_old_toggle_fields_to_new_shape(tmp_path: Path):
+    plan_path = tmp_path / f"episode01{PLAN_FILE_SUFFIX}"
+    legacy_plan = {
+        "plan_version": 1,
+        "source_path": str(tmp_path / "episode01.mp4"),
+        "analysis": {
+            "original_width": 1920,
+            "original_height": 1080,
+            "crop_width": 608,
+            "crop_height": 1080,
+        },
+        "render": {
+            "preset_name": "high",
+            "export_result_debug": True,
+        },
+        "segments": [
+            {
+                "speakers": [0],
+                "start_time": 0.0,
+                "end_time": 2.5,
+                "x": 100,
+                "y": 0,
+            }
+        ],
+    }
+    plan_path.write_text(__import__("json").dumps(legacy_plan), encoding="utf-8")
+
+    loaded_plan = load_plan(plan_path)
+    rewritten_plan = __import__("json").loads(plan_path.read_text(encoding="utf-8"))
+
+    assert loaded_plan["render"]["output_summary_and_logs"] is True
+    assert "export_result_debug" not in rewritten_plan["render"]
+    assert "export_summary_markdown" not in rewritten_plan["render"]
+    assert rewritten_plan["render"]["output_summary_and_logs"] is True
 
 
 def test_resolve_output_filename_supports_suffix_and_keep_original(tmp_path: Path):
