@@ -80,7 +80,7 @@ Each plan now stores:
 - segment IDs for easier manual reference
 - an `enabled` switch per segment so you can skip sections without deleting them
 - a `notes` field per segment
-- analysis settings such as diarization model, optional speaker-count constraints, and optional raw diarization save path
+- analysis settings such as diarization model, optional speaker-count constraints, face-detection backend choice, and optional raw diarization save path
 - render settings such as preset/custom mode, naming mode, suffix, size, overwrite behavior, and optional summary/logs export
 
 Analyze only:
@@ -111,6 +111,18 @@ Analyze with speaker-count guidance plus raw diarization JSON saving:
 
 ```bash
 clipsai-reframe analyze --input "/abs/path/to/videos" --plans-dir "plans" --min-speakers 2 --max-speakers 4 --save-raw-diarization
+```
+
+Analyze with the MediaPipe face-detection backend:
+
+```bash
+clipsai-reframe analyze --input "/abs/path/to/videos" --plans-dir "plans" --face-detect-backend mediapipe
+```
+
+Analyze with MediaPipe full-range face detection plus a higher confidence threshold:
+
+```bash
+clipsai-reframe analyze --input "/abs/path/to/videos" --plans-dir "plans" --face-detect-backend mediapipe --mediapipe-face-detect-model-selection 1 --mediapipe-face-detect-min-detection-confidence 0.65
 ```
 
 Render only:
@@ -180,3 +192,5 @@ The summary markdown includes:
 The analyze step can also save raw pyannote diarization JSON under `plans/raw-diarization/` when `--save-raw-diarization` is enabled.
 
 > **Note:** This repo's current tested local environment uses `pyannote.audio 3.1.1`, so `legacy-3.1` remains the default runnable model there. `community-1` support is built into the code path, but actually using it requires a `pyannote.audio 4.x` environment plus the required Hugging Face access.
+
+> **Note:** The default face-detection backend remains `mtcnn`. The optional `mediapipe` backend currently swaps only the face-detection stage. The later speaking-face logic still uses MediaPipe Face Mesh exactly as before.

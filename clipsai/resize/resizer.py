@@ -9,8 +9,12 @@ Notes
 import logging
 
 # current package imports
+from .config import DEFAULT_FACE_DETECT_BACKEND
+from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
+from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
 from .crops import Crops
 from .exceptions import ResizerError
+from .face_detection import build_face_detector
 from .img_proc import calc_img_bytes
 from .rect import Rect
 from .segment import Segment
@@ -24,7 +28,6 @@ from clipsai.utils.conversions import bytes_to_gibibytes
 
 # 3rd party imports
 import cv2
-from facenet_pytorch import MTCNN
 import mediapipe as mp
 import numpy as np
 from sklearn.cluster import KMeans
@@ -41,12 +44,20 @@ class Resizer:
         self,
         face_detect_margin: int = 20,
         face_detect_post_process: bool = False,
+        face_detect_backend: str = DEFAULT_FACE_DETECT_BACKEND,
+        mediapipe_face_detect_model_selection: int = (
+            DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
+        ),
+        mediapipe_face_detect_min_detection_confidence: float = (
+            DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
+        ),
         device: str = None,
     ) -> None:
         """
         Initializes the Resizer with specific configurations for face
-        detection. This class uses FaceNet for detecting faces and MediaPipe for
-        analyzing mouth to aspect ratio to determine whose speaking within video frames.
+        detection. This class uses a configurable face-detection backend plus
+        MediaPipe Face Mesh for analyzing mouth movement to determine whose speaking
+        within video frames.
 
         Parameters
         ----------
@@ -58,6 +69,13 @@ class Resizer:
             Determines whether to apply post-processing on the detected faces. Setting
             this to False prevents normalization of output images, making them appear
             more natural to the human eye. Default is False (no post-processing).
+        face_detect_backend: str, optional
+            Which supported face-detection backend should be used.
+        mediapipe_face_detect_model_selection: int, optional
+            MediaPipe Face Detection model selection. `0` is short-range and `1` is
+            full-range.
+        mediapipe_face_detect_min_detection_confidence: float, optional
+            Minimum MediaPipe face-detection confidence.
         device: str, optional
             PyTorch device to perform computations on. Ex: 'cpu', 'cuda'. Default is
             None (auto detects the correct device)
@@ -65,12 +83,18 @@ class Resizer:
         if device is None:
             device = pytorch.get_compute_device()
         pytorch.assert_compute_device_available(device)
-        logging.debug("FaceNet using device: {}".format(device))
+        logging.debug("Face-detection backend '{}' using device: {}".format(face_detect_backend, device))
 
-        self._face_detector = MTCNN(
-            margin=face_detect_margin,
-            post_process=face_detect_post_process,
+        self._face_detect_backend = face_detect_backend
+        self._face_detector = build_face_detector(
+            backend_name=face_detect_backend,
+            face_detect_margin=face_detect_margin,
+            face_detect_post_process=face_detect_post_process,
             device=device,
+            mediapipe_face_detect_model_selection=mediapipe_face_detect_model_selection,
+            mediapipe_face_detect_min_detection_confidence=(
+                mediapipe_face_detect_min_detection_confidence
+            ),
         )
         # media pipe automatically uses gpu if available
         self._face_mesher = mp.solutions.face_mesh.FaceMesh()
@@ -491,6 +515,8 @@ class Resizer:
 
         # calculate number of batches to use
         free_cpu_memory = pytorch.get_free_cpu_memory()
+        if self._face_detect_backend != DEFAULT_FACE_DETECT_BACKEND:
+            n_face_detect_batches = 0
         if torch.cuda.is_available():
             n_extract_batches = int((total_extract_bytes // free_cpu_memory) + 1)
         else:
@@ -534,38 +560,7 @@ class Resizer:
         list[np.ndarray]
             The face detections for each frame.
         """
-        if len(frames) == 0:
-            logging.debug("No frames to detect faces in.")
-            return []
-
-        # resize the frames
-        logging.debug("Detecting faces in {} frames.".format(len(frames)))
-        downsample_factor = max(frames[0].shape[1] / face_detect_width, 1)
-        detect_height = int(frames[0].shape[0] / downsample_factor)
-        resized_frames = []
-        for frame in frames:
-            resized_frame = cv2.resize(frame, (face_detect_width, detect_height))
-            if torch.cuda.is_available():
-                resized_frame = torch.from_numpy(resized_frame).to(
-                    device="cuda", dtype=torch.uint8
-                )
-            resized_frames.append(resized_frame)
-
-        # detect faces in batches
-        if torch.cuda.is_available():
-            resized_frames = torch.stack(resized_frames)
-        detections, _ = self._face_detector.detect(resized_frames)
-
-        # detections are returned as numpy arrays regardless
-        face_detections = []
-        for detection in detections:
-            if detection is not None:
-                detection[detection < 0] = 0
-                detection = (detection * downsample_factor).astype(np.int16)
-            face_detections.append(detection)
-
-        logging.debug("Detected faces in {} frames.".format(len(face_detections)))
-        return face_detections
+        return self._face_detector.detect(frames, face_detect_width)
 
     def _add_x_y_coords_to_each_segment(
         self,
@@ -1028,7 +1023,9 @@ class Resizer:
         """
         Remove the face detector from memory and explicity free up GPU memory.
         """
-        del self._face_detector
+        self._face_detector.cleanup()
         self._face_detector = None
+        self._face_mesher.close()
+        self._face_mesher = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

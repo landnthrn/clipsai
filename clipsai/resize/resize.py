@@ -5,6 +5,9 @@ Resize an asset's media to a 9:16 aspect ratio.
 import logging
 
 # current package imports
+from .config import DEFAULT_FACE_DETECT_BACKEND
+from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
+from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
 from .crops import Crops
 from .resizer import Resizer
 from .vid_proc import detect_scenes
@@ -24,6 +27,13 @@ def resize(
     face_detect_width: int = 960,
     face_detect_margin: int = 20,
     face_detect_post_process: bool = False,
+    face_detect_backend: str = DEFAULT_FACE_DETECT_BACKEND,
+    mediapipe_face_detect_model_selection: int = (
+        DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
+    ),
+    mediapipe_face_detect_min_detection_confidence: float = (
+        DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
+    ),
     n_face_detect_batches: int = 8,
     min_scene_duration: float = 0.25,
     scene_merge_threshold: float = 0.25,
@@ -58,6 +68,13 @@ def resize(
     face_detect_post_process: bool
         If set to True, post-processing is applied to the face detection output to make
         it appear more natural.
+    face_detect_backend: str
+        Which supported face-detection backend to use.
+    mediapipe_face_detect_model_selection: int
+        MediaPipe face-detection model selection. `0` is short-range and `1` is
+        full-range.
+    mediapipe_face_detect_min_detection_confidence: float
+        Minimum MediaPipe face-detection confidence.
     n_face_detect_batches: int
         Number of batches for processing face detection when using GPUs.
     min_scene_duration: float
@@ -112,6 +129,11 @@ def resize(
     resizer = Resizer(
         face_detect_margin=face_detect_margin,
         face_detect_post_process=face_detect_post_process,
+        face_detect_backend=face_detect_backend,
+        mediapipe_face_detect_model_selection=mediapipe_face_detect_model_selection,
+        mediapipe_face_detect_min_detection_confidence=(
+            mediapipe_face_detect_min_detection_confidence
+        ),
         device=device,
     )
     crops = resizer.resize(

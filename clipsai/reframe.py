@@ -14,8 +14,12 @@ from pathlib import Path
 
 from clipsai.diarize.config import DEFAULT_DIARIZATION_MODEL
 from clipsai.diarize.config import get_supported_diarization_models
+from clipsai.resize.config import DEFAULT_FACE_DETECT_BACKEND
+from clipsai.resize.config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
+from clipsai.resize.config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
+from clipsai.resize.config import get_supported_face_detect_backends
 
-PLAN_VERSION = 3
+PLAN_VERSION = 4
 SUPPORTED_VIDEO_EXTENSIONS = {
     ".mp4",
     ".mov",
@@ -31,6 +35,11 @@ DEFAULT_ASPECT_RATIO = (9, 16)
 DEFAULT_MIN_SEGMENT_DURATION = 1.5
 DEFAULT_SAMPLES_PER_SEGMENT = 13
 DEFAULT_FACE_DETECT_WIDTH = 960
+DEFAULT_FACE_DETECT_BACKEND_NAME = DEFAULT_FACE_DETECT_BACKEND
+DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL = DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
+DEFAULT_MEDIAPIPE_FACE_DETECT_CONFIDENCE = (
+    DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
+)
 DEFAULT_SCENE_MERGE_THRESHOLD = 0.25
 DEFAULT_RENDER_PRESET = "high"
 DEFAULT_RENDER_MODE = "preset"
@@ -261,6 +270,9 @@ def build_plan_editing_help() -> dict:
             "min_segment_duration": "Analyze-time setting used to build this plan. Usually not meant to be edited after analysis.",
             "samples_per_segment": "Analyze-time setting used to build this plan. Usually not meant to be edited after analysis.",
             "face_detect_width": "Analyze-time face-detection size. Usually not meant to be edited after analysis.",
+            "face_detect_backend": "Analyze-time face-detection backend choice. Usually not meant to be edited after analysis.",
+            "mediapipe_face_detect_model_selection": "Analyze-time MediaPipe face-detection model selection. Usually not meant to be edited after analysis.",
+            "mediapipe_face_detect_min_detection_confidence": "Analyze-time MediaPipe face-detection minimum confidence. Usually not meant to be edited after analysis.",
             "scene_merge_threshold": "Analyze-time merge setting. Usually not meant to be edited after analysis.",
             "raw_diarization_path": "Optional saved raw diarization JSON path from analysis. Usually not meant to be edited.",
         },
@@ -384,6 +396,15 @@ def normalize_plan_data(plan_data: dict) -> dict:
     analysis_data.setdefault("min_speakers", None)
     analysis_data.setdefault("max_speakers", None)
     analysis_data.setdefault("raw_diarization_path", None)
+    analysis_data.setdefault("face_detect_backend", DEFAULT_FACE_DETECT_BACKEND_NAME)
+    analysis_data.setdefault(
+        "mediapipe_face_detect_model_selection",
+        DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL,
+    )
+    analysis_data.setdefault(
+        "mediapipe_face_detect_min_detection_confidence",
+        DEFAULT_MEDIAPIPE_FACE_DETECT_CONFIDENCE,
+    )
     render_data.setdefault("mode", DEFAULT_RENDER_MODE)
     render_data.setdefault("preset_name", DEFAULT_RENDER_PRESET)
     render_data.setdefault("output_name_mode", inferred_output_name_mode)
@@ -725,6 +746,9 @@ def build_render_summary_markdown(
         f"- Exact speaker count: `{format_optional_value(analysis_data.get('num_speakers'))}`",
         f"- Min speakers: `{format_optional_value(analysis_data.get('min_speakers'))}`",
         f"- Max speakers: `{format_optional_value(analysis_data.get('max_speakers'))}`",
+        f"- Face-detection backend: `{analysis_data.get('face_detect_backend', DEFAULT_FACE_DETECT_BACKEND_NAME)}`",
+        f"- MediaPipe face-detect model selection: `{format_optional_value(analysis_data.get('mediapipe_face_detect_model_selection'))}`",
+        f"- MediaPipe face-detect minimum confidence: `{format_optional_value(analysis_data.get('mediapipe_face_detect_min_detection_confidence'))}`",
         f"- Raw diarization path: `{format_optional_value(analysis_data.get('raw_diarization_path'), 'not saved')}`",
         "",
         "## Render Settings",
@@ -933,6 +957,9 @@ def analyze_video(
     min_segment_duration: float,
     samples_per_segment: int,
     face_detect_width: int,
+    face_detect_backend: str,
+    mediapipe_face_detect_model_selection: int,
+    mediapipe_face_detect_min_detection_confidence: float,
     scene_merge_threshold: float,
     diarization_model: str,
     num_speakers: int | None,
@@ -963,6 +990,11 @@ def analyze_video(
         min_segment_duration=min_segment_duration,
         samples_per_segment=samples_per_segment,
         face_detect_width=face_detect_width,
+        face_detect_backend=face_detect_backend,
+        mediapipe_face_detect_model_selection=mediapipe_face_detect_model_selection,
+        mediapipe_face_detect_min_detection_confidence=(
+            mediapipe_face_detect_min_detection_confidence
+        ),
         scene_merge_threshold=scene_merge_threshold,
     )
     analysis_settings = {
@@ -973,6 +1005,11 @@ def analyze_video(
         "min_segment_duration": min_segment_duration,
         "samples_per_segment": samples_per_segment,
         "face_detect_width": face_detect_width,
+        "face_detect_backend": face_detect_backend,
+        "mediapipe_face_detect_model_selection": mediapipe_face_detect_model_selection,
+        "mediapipe_face_detect_min_detection_confidence": (
+            mediapipe_face_detect_min_detection_confidence
+        ),
         "scene_merge_threshold": scene_merge_threshold,
         "raw_diarization_path": (
             None if raw_diarization_path is None else str(raw_diarization_path)
@@ -1241,6 +1278,13 @@ def analyze_command(args: argparse.Namespace) -> int:
             min_segment_duration=args.min_segment_duration,
             samples_per_segment=args.samples_per_segment,
             face_detect_width=args.face_detect_width,
+            face_detect_backend=args.face_detect_backend,
+            mediapipe_face_detect_model_selection=(
+                args.mediapipe_face_detect_model_selection
+            ),
+            mediapipe_face_detect_min_detection_confidence=(
+                args.mediapipe_face_detect_min_detection_confidence
+            ),
             scene_merge_threshold=args.scene_merge_threshold,
             diarization_model=args.diarization_model,
             num_speakers=args.num_speakers,
@@ -1393,6 +1437,25 @@ def build_parser() -> argparse.ArgumentParser:
             type=int,
             default=DEFAULT_FACE_DETECT_WIDTH,
             help="Downscaled width used for face detection.",
+        )
+        subparser.add_argument(
+            "--face-detect-backend",
+            choices=get_supported_face_detect_backends(),
+            default=DEFAULT_FACE_DETECT_BACKEND_NAME,
+            help="Which supported face-detection backend to use during analysis.",
+        )
+        subparser.add_argument(
+            "--mediapipe-face-detect-model-selection",
+            type=int,
+            choices=[0, 1],
+            default=DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL,
+            help="MediaPipe face-detection model selection. 0 = short-range, 1 = full-range.",
+        )
+        subparser.add_argument(
+            "--mediapipe-face-detect-min-detection-confidence",
+            type=float,
+            default=DEFAULT_MEDIAPIPE_FACE_DETECT_CONFIDENCE,
+            help="Minimum MediaPipe face-detection confidence used when that backend is selected.",
         )
         subparser.add_argument(
             "--scene-merge-threshold",

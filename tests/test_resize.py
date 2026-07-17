@@ -172,7 +172,8 @@ def test_calc_n_batches(
 
     # Mock pytorch.get_free_cpu_memory ~7.5 GiB
     with patch("torch.cuda.is_available", return_value=gpu_available), patch(
-        "utils.pytorch.get_free_cpu_memory", return_value=8000000000
+        "clipsai.resize.resizer.pytorch.get_free_cpu_memory",
+        return_value=8000000000,
     ):
         n_batches = resizer._calc_n_batches(
             video_file=mock_video_file,
@@ -182,6 +183,64 @@ def test_calc_n_batches(
         )
 
         assert n_batches == expected_batches
+
+
+def test_resizer_builds_requested_face_detection_backend():
+    with patch(
+        "clipsai.resize.resizer.pytorch.get_compute_device",
+        return_value="cpu",
+    ), patch(
+        "clipsai.resize.resizer.pytorch.assert_compute_device_available",
+        return_value=None,
+    ), patch(
+        "clipsai.resize.resizer.build_face_detector",
+        return_value=MagicMock(),
+    ) as detector_builder, patch(
+        "clipsai.resize.resizer.mp.solutions.face_mesh.FaceMesh",
+        return_value=MagicMock(),
+    ):
+        Resizer(
+            face_detect_backend="mediapipe",
+            mediapipe_face_detect_model_selection=1,
+            mediapipe_face_detect_min_detection_confidence=0.65,
+        )
+
+    detector_builder.assert_called_once_with(
+        backend_name="mediapipe",
+        face_detect_margin=20,
+        face_detect_post_process=False,
+        device="cpu",
+        mediapipe_face_detect_model_selection=1,
+        mediapipe_face_detect_min_detection_confidence=0.65,
+    )
+
+
+def test_calc_n_batches_treats_mediapipe_as_cpu_side_detection():
+    mock_video_file = MagicMock(spec=VideoFile)
+    mock_video_file.get_width_pixels.return_value = 1920
+    mock_video_file.get_height_pixels.return_value = 1080
+
+    with patch(
+        "clipsai.resize.resizer.pytorch.get_compute_device",
+        return_value="cpu",
+    ), patch(
+        "clipsai.resize.resizer.pytorch.assert_compute_device_available",
+        return_value=None,
+    ):
+        resizer = Resizer(face_detect_backend="mediapipe")
+
+    with patch("torch.cuda.is_available", return_value=True), patch(
+        "clipsai.resize.resizer.pytorch.get_free_cpu_memory",
+        return_value=8000000000,
+    ):
+        n_batches = resizer._calc_n_batches(
+            video_file=mock_video_file,
+            num_frames=100,
+            face_detect_width=960,
+            n_face_detect_batches=8,
+        )
+
+    assert n_batches == 1
 
 
 @pytest.mark.parametrize(

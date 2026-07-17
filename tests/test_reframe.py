@@ -67,6 +67,9 @@ def test_build_plan_contains_expected_shape(tmp_path: Path):
             "min_speakers": None,
             "max_speakers": None,
             "min_segment_duration": 0.75,
+            "face_detect_backend": "mtcnn",
+            "mediapipe_face_detect_model_selection": 0,
+            "mediapipe_face_detect_min_detection_confidence": 0.5,
             "raw_diarization_path": None,
         },
     )
@@ -76,6 +79,7 @@ def test_build_plan_contains_expected_shape(tmp_path: Path):
     assert plan["source_filename"] == "podcast.mp4"
     assert plan["analysis"]["crop_width"] == 608
     assert plan["analysis"]["diarization_model"] == "legacy-3.1"
+    assert plan["analysis"]["face_detect_backend"] == "mtcnn"
     assert plan["analysis"]["raw_diarization_path"] is None
     assert plan["render"]["mode"] == "preset"
     assert plan["render"]["preset_name"] == "high"
@@ -144,6 +148,9 @@ def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
     assert normalized["analysis"]["num_speakers"] is None
     assert normalized["analysis"]["min_speakers"] is None
     assert normalized["analysis"]["max_speakers"] is None
+    assert normalized["analysis"]["face_detect_backend"] == "mtcnn"
+    assert normalized["analysis"]["mediapipe_face_detect_model_selection"] == 0
+    assert normalized["analysis"]["mediapipe_face_detect_min_detection_confidence"] == 0.5
     assert normalized["analysis"]["raw_diarization_path"] is None
     assert normalized["render"]["mode"] == "preset"
     assert normalized["render"]["output_name_mode"] == "suffix"
@@ -404,6 +411,9 @@ def test_build_render_summary_markdown_contains_core_details(tmp_path: Path):
             "num_speakers": None,
             "min_speakers": 2,
             "max_speakers": 4,
+            "face_detect_backend": "mediapipe",
+            "mediapipe_face_detect_model_selection": 1,
+            "mediapipe_face_detect_min_detection_confidence": 0.65,
             "raw_diarization_path": "plans/raw-diarization/episode01.raw-diarization.json",
         },
         render_settings=render_settings,
@@ -416,6 +426,8 @@ def test_build_render_summary_markdown_contains_core_details(tmp_path: Path):
     assert "Rendered output" in summary_markdown
     assert "Diarization model: `community-1`" in summary_markdown
     assert "Min speakers: `2`" in summary_markdown
+    assert "Face-detection backend: `mediapipe`" in summary_markdown
+    assert "MediaPipe face-detect model selection: `1`" in summary_markdown
     assert "Output size: `1080x1920`" in summary_markdown
     assert "Enabled segments rendered: `2`" in summary_markdown
     assert "Detected speaker count: `0`" in summary_markdown
@@ -531,6 +543,9 @@ def test_build_summary_and_logs_payload_contains_file_render_and_segment_details
             "num_speakers": 2,
             "min_speakers": None,
             "max_speakers": None,
+            "face_detect_backend": "mtcnn",
+            "mediapipe_face_detect_model_selection": 0,
+            "mediapipe_face_detect_min_detection_confidence": 0.5,
             "raw_diarization_path": "plans/raw-diarization/episode01.raw-diarization.json",
         },
         render_settings=render_settings,
@@ -542,6 +557,7 @@ def test_build_summary_and_logs_payload_contains_file_render_and_segment_details
     assert payload["files"]["timeline_path"].endswith("timeline.csv")
     assert payload["files"]["full_record_path"].endswith("full-record.json")
     assert payload["analysis"]["num_speakers"] == 2
+    assert payload["analysis"]["face_detect_backend"] == "mtcnn"
     assert payload["render"]["output_name"] == "episode01_vertical.mp4"
     assert payload["segments"]["enabled_count"] == 1
     assert payload["segments"]["disabled_count"] == 1
