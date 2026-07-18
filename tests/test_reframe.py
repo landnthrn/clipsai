@@ -196,6 +196,37 @@ def test_normalize_plan_data_infers_keep_original_output_mode(tmp_path: Path):
     assert normalized["render"]["output_suffix"] == ""
 
 
+def test_normalize_plan_data_defaults_community_runs_to_mediapipe(tmp_path: Path):
+    source_path = tmp_path / "episode01.mov"
+    plan_data = {
+        "plan_version": 1,
+        "source_path": str(source_path),
+        "analysis": {
+            "diarization_model": "community-1",
+            "original_width": 1920,
+            "original_height": 1080,
+            "crop_width": 608,
+            "crop_height": 1080,
+        },
+        "render": {
+            "preset_name": "high",
+        },
+        "segments": [
+            {
+                "speakers": [0],
+                "start_time": 0.0,
+                "end_time": 2.5,
+                "x": 100,
+                "y": 0,
+            }
+        ],
+    }
+
+    normalized = normalize_plan_data(plan_data)
+
+    assert normalized["analysis"]["face_detect_backend"] == "mediapipe"
+
+
 def test_load_plan_rewrites_old_toggle_fields_to_new_shape(tmp_path: Path):
     plan_path = tmp_path / f"episode01{PLAN_FILE_SUFFIX}"
     legacy_plan = {

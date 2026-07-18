@@ -1,0 +1,29 @@
+# Legacy analyze/render profile for the modified ClipsAI repo.
+# Keep the legacy GPU stack separate and stable, then install this file, then run:
+#   pip install -e . --no-deps
+#
+# Expected preinstalled GPU stack in the isolated legacy environment:
+# - torch 2.2.2+cu121
+# - torchvision 0.17.2+cu121
+# - torchaudio 2.2.2+cu121
+#
+# This file intentionally does not install torch, torchaudio, or torchvision so
+# pip does not replace an already-working CUDA setup.
+
+av
+facenet-pytorch==2.6.0
+matplotlib
+mediapipe==0.10.21
+nltk
+numpy==1.26.4
+opencv-python
+pandas
+psutil
+pyannote.audio==3.1.1
+pyannote.core<6
+pynvml
+pytest
+python-magic
+scenedetect
+scikit-learn
+scipy

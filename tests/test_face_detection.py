@@ -1,23 +1,41 @@
+import builtins
+import importlib
+import sys
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from clipsai.resize.face_detection import MediaPipeFaceDetector
-from clipsai.resize.face_detection import build_face_detector
+import clipsai.resize.face_detection as face_detection
+
+
+def test_importing_face_detection_module_does_not_require_facenet_pytorch():
+    original_import = builtins.__import__
+
+    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "facenet_pytorch":
+            raise ImportError("blocked for test")
+        return original_import(name, globals, locals, fromlist, level)
+
+    sys.modules.pop("clipsai.resize.face_detection", None)
+    with patch("builtins.__import__", side_effect=guarded_import):
+        module = importlib.import_module("clipsai.resize.face_detection")
+
+    assert hasattr(module, "MediaPipeFaceDetector")
+    assert hasattr(module, "MtcnnFaceDetector")
 
 
 def test_build_face_detector_rejects_unknown_backend():
     with pytest.raises(ValueError, match="Unsupported face-detection backend"):
-        build_face_detector(backend_name="unknown-backend")
+        face_detection.build_face_detector(backend_name="unknown-backend")
 
 
 def test_build_face_detector_selects_mediapipe_backend():
-    with patch("clipsai.resize.face_detection.MediaPipeFaceDetector") as detector_cls:
+    with patch.object(face_detection, "MediaPipeFaceDetector") as detector_cls:
         sentinel = object()
         detector_cls.return_value = sentinel
 
-        detector = build_face_detector(backend_name="mediapipe")
+        detector = face_detection.build_face_detector(backend_name="mediapipe")
 
     assert detector is sentinel
     detector_cls.assert_called_once_with(
@@ -26,13 +44,39 @@ def test_build_face_detector_selects_mediapipe_backend():
     )
 
 
+def test_build_face_detector_creates_mediapipe_without_facenet_pytorch():
+    with patch(
+        "clipsai.resize.face_detection.import_module",
+        side_effect=AssertionError("facenet-pytorch should not be imported"),
+    ), patch.object(face_detection, "MediaPipeFaceDetector") as detector_cls:
+        sentinel = object()
+        detector_cls.return_value = sentinel
+
+        detector = face_detection.build_face_detector(backend_name="mediapipe")
+
+    assert detector is sentinel
+
+
+def test_mtcnn_backend_raises_clear_error_when_facenet_pytorch_is_missing():
+    with patch.object(
+        face_detection,
+        "_import_mtcnn",
+        side_effect=RuntimeError(
+            "Face-detection backend 'mtcnn' requires the optional "
+            "'facenet-pytorch' package."
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="requires the optional 'facenet-pytorch'"):
+            face_detection.build_face_detector(backend_name="mtcnn")
+
+
 def test_mediapipe_face_detector_converts_relative_boxes_to_pixel_boxes():
     fake_face_detection = MagicMock()
     with patch(
         "clipsai.resize.face_detection.mp.solutions.face_detection.FaceDetection",
         return_value=fake_face_detection,
     ):
-        detector = MediaPipeFaceDetector(
+        detector = face_detection.MediaPipeFaceDetector(
             model_selection=1,
             min_detection_confidence=0.65,
         )

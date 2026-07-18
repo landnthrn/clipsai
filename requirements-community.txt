@@ -1,0 +1,29 @@
+# Community analyze/render profile for the modified ClipsAI repo.
+# Install the CUDA Torch stack separately first, then install this file, then run:
+#   pip install -e . --no-deps
+#
+# Expected preinstalled GPU stack in the isolated Community environment:
+# - torch 2.13.0+cu130
+# - torchaudio 2.11.0+cu130
+# - torchvision matching that stack if needed later
+# - torchcodec 0.15.0+cpu
+#
+# This file intentionally does not install torch, torchaudio, torchvision, or
+# torchcodec so pip does not replace an already-working CUDA setup.
+
+av
+matplotlib
+mediapipe==0.10.21
+nltk
+numpy==1.26.4
+opencv-python
+pandas
+psutil
+pyannote.audio>=4,<5
+pyannote.core>=6,<7
+pynvml
+pytest
+python-magic
+scenedetect
+scikit-learn
+scipy

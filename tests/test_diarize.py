@@ -102,6 +102,31 @@ def test_pyannote_diarizer_uses_selected_pipeline_checkpoint():
     )
 
 
+def test_pyannote_diarizer_uses_community_pipeline_on_pyannote_4():
+    pipeline_instance = Mock()
+    pipeline_instance.to.return_value = pipeline_instance
+    with patch(
+        "clipsai.diarize.pyannote.get_pyannote_audio_major_version",
+        return_value=4,
+    ), patch(
+        "pyannote.audio.__version__",
+        "4.0.7",
+    ), patch(
+        "pyannote.audio.Pipeline.from_pretrained",
+        return_value=pipeline_instance,
+    ) as pipeline_loader:
+        diarizer = PyannoteDiarizer(
+            auth_token="mock_token",
+            diarization_model="community-1",
+        )
+
+    assert diarizer.model_name == "community-1"
+    pipeline_loader.assert_called_once_with(
+        DIARIZATION_MODELS["community-1"]["checkpoint"],
+        token="mock_token",
+    )
+
+
 def test_pyannote_diarizer_blocks_community_model_on_old_pyannote():
     with patch(
         "clipsai.diarize.pyannote.get_pyannote_audio_major_version",

@@ -2,10 +2,10 @@
 Face-detection backend wrappers used by the resizer.
 """
 
+from importlib import import_module
 import logging
 
 import cv2
-from facenet_pytorch import MTCNN
 import mediapipe as mp
 import numpy as np
 import torch
@@ -14,6 +14,21 @@ from .config import assert_supported_face_detect_backend
 from .config import DEFAULT_FACE_DETECT_BACKEND
 from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
 from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
+
+
+def _import_mtcnn():
+    """
+    Import the optional facenet-pytorch MTCNN class only when needed.
+    """
+    try:
+        facenet_module = import_module("facenet_pytorch")
+    except ImportError as exc:
+        raise RuntimeError(
+            "Face-detection backend 'mtcnn' requires the optional "
+            "'facenet-pytorch' package. Install the legacy dependency profile or "
+            "switch to the 'mediapipe' face-detection backend."
+        ) from exc
+    return facenet_module.MTCNN
 
 
 def _resize_frames_for_detection(
@@ -42,7 +57,8 @@ class MtcnnFaceDetector:
         face_detect_post_process: bool = False,
         device: str = None,
     ) -> None:
-        self._detector = MTCNN(
+        mtcnn_cls = _import_mtcnn()
+        self._detector = mtcnn_cls(
             margin=face_detect_margin,
             post_process=face_detect_post_process,
             device=device,

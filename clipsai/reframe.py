@@ -17,6 +17,7 @@ from clipsai.diarize.config import get_supported_diarization_models
 from clipsai.resize.config import DEFAULT_FACE_DETECT_BACKEND
 from clipsai.resize.config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
 from clipsai.resize.config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
+from clipsai.resize.config import get_default_face_detect_backend
 from clipsai.resize.config import get_supported_face_detect_backends
 
 PLAN_VERSION = 4
@@ -396,7 +397,10 @@ def normalize_plan_data(plan_data: dict) -> dict:
     analysis_data.setdefault("min_speakers", None)
     analysis_data.setdefault("max_speakers", None)
     analysis_data.setdefault("raw_diarization_path", None)
-    analysis_data.setdefault("face_detect_backend", DEFAULT_FACE_DETECT_BACKEND_NAME)
+    analysis_data.setdefault(
+        "face_detect_backend",
+        get_default_face_detect_backend(analysis_data["diarization_model"]),
+    )
     analysis_data.setdefault(
         "mediapipe_face_detect_model_selection",
         DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL,
@@ -957,7 +961,7 @@ def analyze_video(
     min_segment_duration: float,
     samples_per_segment: int,
     face_detect_width: int,
-    face_detect_backend: str,
+    face_detect_backend: str | None,
     mediapipe_face_detect_model_selection: int,
     mediapipe_face_detect_min_detection_confidence: float,
     scene_merge_threshold: float,
@@ -975,6 +979,9 @@ def analyze_video(
     raw_diarization_path = None
     if save_raw_diarization:
         raw_diarization_path = default_raw_diarization_path(video_path, plans_dir)
+    face_detect_backend = face_detect_backend or get_default_face_detect_backend(
+        diarization_model
+    )
 
     crops = resize(
         video_file_path=str(video_path),
@@ -1441,8 +1448,11 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument(
             "--face-detect-backend",
             choices=get_supported_face_detect_backends(),
-            default=DEFAULT_FACE_DETECT_BACKEND_NAME,
-            help="Which supported face-detection backend to use during analysis.",
+            default=None,
+            help=(
+                "Optional face-detection backend override. If omitted, "
+                "legacy-3.1 defaults to mtcnn and community-1 defaults to mediapipe."
+            ),
         )
         subparser.add_argument(
             "--mediapipe-face-detect-model-selection",

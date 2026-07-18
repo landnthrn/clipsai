@@ -5,9 +5,9 @@ Resize an asset's media to a 9:16 aspect ratio.
 import logging
 
 # current package imports
-from .config import DEFAULT_FACE_DETECT_BACKEND
 from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
 from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
+from .config import get_default_face_detect_backend
 from .crops import Crops
 from .resizer import Resizer
 from .vid_proc import detect_scenes
@@ -27,7 +27,7 @@ def resize(
     face_detect_width: int = 960,
     face_detect_margin: int = 20,
     face_detect_post_process: bool = False,
-    face_detect_backend: str = DEFAULT_FACE_DETECT_BACKEND,
+    face_detect_backend: str | None = None,
     mediapipe_face_detect_model_selection: int = (
         DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
     ),
@@ -69,7 +69,8 @@ def resize(
         If set to True, post-processing is applied to the face detection output to make
         it appear more natural.
     face_detect_backend: str
-        Which supported face-detection backend to use.
+        Which supported face-detection backend to use. If omitted, the default is
+        chosen from the diarization mode.
     mediapipe_face_detect_model_selection: int
         MediaPipe face-detection model selection. `0` is short-range and `1` is
         full-range.
@@ -126,6 +127,9 @@ def resize(
     scene_changes = detect_scenes(media, min_scene_duration)
 
     logging.debug("RESIZING VIDEO) ({})".format(media.get_filename()))
+    face_detect_backend = face_detect_backend or get_default_face_detect_backend(
+        diarization_model
+    )
     resizer = Resizer(
         face_detect_margin=face_detect_margin,
         face_detect_post_process=face_detect_post_process,
