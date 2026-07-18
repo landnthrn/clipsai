@@ -51,6 +51,40 @@ unconditionally anymore.
 If you need the transcription stack, install its extra dependencies separately for the
 environment you want to use.
 
+### MediaPipe model assets for the Community profile
+
+The modern Community MediaPipe path uses the MediaPipe Tasks Python APIs, which require
+local model files. This repo does not auto-download them during a normal run.
+
+Default local paths:
+
+- `models/mediapipe/blaze_face_short_range.tflite` for MediaPipe short-range detection
+- `models/mediapipe/blaze_face_full_range_sparse.tflite` for MediaPipe full-range detection
+- `models/mediapipe/face_landmarker.task` for mouth-landmark analysis
+
+Those map to the saved `mediapipe_face_detect_model_selection` value like this:
+
+- `0` -> `blaze_face_short_range.tflite`
+- `1` -> `blaze_face_full_range_sparse.tflite`
+
+Optional environment-variable overrides:
+
+- `CLIPSAI_MEDIAPIPE_FACE_DETECTOR_MODEL_PATH`
+- `CLIPSAI_MEDIAPIPE_FACE_DETECTOR_FULL_RANGE_MODEL_PATH`
+- `CLIPSAI_MEDIAPIPE_FACE_LANDMARKER_MODEL_PATH`
+
+If one of those files is missing, ClipsAI now raises a clear error telling you which
+path was checked and which environment variable can override it.
+
+The detector and landmarker assets should be downloaded from the official MediaPipe
+task pages and stored locally before the first Community run.
+
+Official model URLs currently used by the default path mapping:
+
+- `https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite`
+- `https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_full_range/float16/latest/blaze_face_full_range_sparse.tflite`
+- `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task`
+
 ### Creating clips
 
 Since clips are found using the video's transcript, the video must first be transcribed. Transcribing is done with [WhisperX](https://github.com/m-bain/whisperX), an open-source wrapper on [Whisper](https://github.com/openai/whisper) with additional functionality for detecting start and stop times for each word. For trimming the original video into a chosen clip, refer to the clipping reference.
@@ -213,4 +247,6 @@ The analyze step can also save raw pyannote diarization JSON under `plans/raw-di
 
 > **Note:** If `--face-detect-backend` is omitted, `legacy-3.1` defaults to `mtcnn` while `community-1` defaults to `mediapipe`. You can still explicitly choose either backend from the CLI or stored plan.
 
-> **Note:** The optional `mediapipe` backend currently swaps only the face-detection stage. The later speaking-face logic still uses MediaPipe Face Mesh exactly as before.
+> **Note:** `legacy-3.1` keeps the older MediaPipe Solutions face-mesh path. `community-1`
+> now uses the modern MediaPipe Tasks Face Detector plus Face Landmarker path, so it
+> does not rely on `mp.solutions` during Community runs.

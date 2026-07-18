@@ -11,6 +11,23 @@ from clipsai.resize.rect import Rect
 import pytest
 
 
+def build_test_resizer(**kwargs):
+    with patch(
+        "clipsai.resize.resizer.pytorch.get_compute_device",
+        return_value="cpu",
+    ), patch(
+        "clipsai.resize.resizer.pytorch.assert_compute_device_available",
+        return_value=None,
+    ), patch(
+        "clipsai.resize.resizer.build_face_detector",
+        return_value=MagicMock(),
+    ), patch(
+        "clipsai.resize.resizer.build_face_landmarker",
+        return_value=MagicMock(),
+    ):
+        return Resizer(**kwargs)
+
+
 @pytest.mark.parametrize(
     "original_width, original_height, aspect_ratio, expected",
     [
@@ -40,7 +57,7 @@ def test_calc_resize_width_and_height_pixels(
     aspect_ratio: tuple[int, int],
     expected: tuple[int, int],
 ):
-    resizer = Resizer()
+    resizer = build_test_resizer()
     result = resizer._calc_resize_width_and_height_pixels(
         original_width_pixels=original_width,
         original_height_pixels=original_height,
@@ -129,7 +146,7 @@ def test_calc_resize_width_and_height_pixels(
 def test_merge_scene_change_and_speaker_segments(
     speaker_segments: list[dict], scene_changes: list[float], expected: list[dict]
 ):
-    resizer = Resizer()
+    resizer = build_test_resizer()
     result = resizer._merge_scene_change_and_speaker_segments(
         speaker_segments=speaker_segments,
         scene_changes=scene_changes,
@@ -168,7 +185,7 @@ def test_calc_n_batches(
     mock_video_file.get_width_pixels.return_value = width
     mock_video_file.get_height_pixels.return_value = height
 
-    resizer = Resizer()
+    resizer = build_test_resizer()
 
     # Mock pytorch.get_free_cpu_memory ~7.5 GiB
     with patch("torch.cuda.is_available", return_value=gpu_available), patch(
@@ -196,13 +213,14 @@ def test_resizer_builds_requested_face_detection_backend():
         "clipsai.resize.resizer.build_face_detector",
         return_value=MagicMock(),
     ) as detector_builder, patch(
-        "clipsai.resize.resizer.mp.solutions.face_mesh.FaceMesh",
+        "clipsai.resize.resizer.build_face_landmarker",
         return_value=MagicMock(),
-    ):
+    ) as landmarker_builder:
         Resizer(
             face_detect_backend="mediapipe",
             mediapipe_face_detect_model_selection=1,
             mediapipe_face_detect_min_detection_confidence=0.65,
+            diarization_model="community-1",
         )
 
     detector_builder.assert_called_once_with(
@@ -212,7 +230,9 @@ def test_resizer_builds_requested_face_detection_backend():
         device="cpu",
         mediapipe_face_detect_model_selection=1,
         mediapipe_face_detect_min_detection_confidence=0.65,
+        diarization_model="community-1",
     )
+    landmarker_builder.assert_called_once_with(diarization_model="community-1")
 
 
 def test_calc_n_batches_treats_mediapipe_as_cpu_side_detection():
@@ -226,8 +246,17 @@ def test_calc_n_batches_treats_mediapipe_as_cpu_side_detection():
     ), patch(
         "clipsai.resize.resizer.pytorch.assert_compute_device_available",
         return_value=None,
+    ), patch(
+        "clipsai.resize.resizer.build_face_detector",
+        return_value=MagicMock(),
+    ), patch(
+        "clipsai.resize.resizer.build_face_landmarker",
+        return_value=MagicMock(),
     ):
-        resizer = Resizer(face_detect_backend="mediapipe")
+        resizer = Resizer(
+            face_detect_backend="mediapipe",
+            diarization_model="community-1",
+        )
 
     with patch("torch.cuda.is_available", return_value=True), patch(
         "clipsai.resize.resizer.pytorch.get_free_cpu_memory",
@@ -257,7 +286,7 @@ def test_calc_n_batches_treats_mediapipe_as_cpu_side_detection():
     ],
 )
 def test_calc_crop(roi, resize_width, resize_height, expected_crop):
-    resizer = Resizer()
+    resizer = build_test_resizer()
     actual_crop = resizer._calc_crop(roi, resize_width, resize_height)
     assert actual_crop == expected_crop
 
@@ -328,6 +357,6 @@ def test_merge_identical_segments(segments, expected):
     mock_video_file.get_width_pixels.return_value = 1000
     mock_video_file.get_height_pixels.return_value = 1000
 
-    resizer = Resizer()
+    resizer = build_test_resizer()
     merged_segments = resizer._merge_identical_segments(segments, mock_video_file)
     assert merged_segments == expected

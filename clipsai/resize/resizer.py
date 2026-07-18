@@ -15,12 +15,14 @@ from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
 from .crops import Crops
 from .exceptions import ResizerError
 from .face_detection import build_face_detector
+from .face_detection import build_face_landmarker
 from .img_proc import calc_img_bytes
 from .rect import Rect
 from .segment import Segment
 from .vid_proc import extract_frames
 
 # local package imports
+from clipsai.diarize.config import DEFAULT_DIARIZATION_MODEL
 from clipsai.media.editor import MediaEditor
 from clipsai.media.video_file import VideoFile
 from clipsai.utils import pytorch
@@ -28,7 +30,6 @@ from clipsai.utils.conversions import bytes_to_gibibytes
 
 # 3rd party imports
 import cv2
-import mediapipe as mp
 import numpy as np
 from sklearn.cluster import KMeans
 import torch
@@ -51,13 +52,14 @@ class Resizer:
         mediapipe_face_detect_min_detection_confidence: float = (
             DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
         ),
+        diarization_model: str = DEFAULT_DIARIZATION_MODEL,
         device: str = None,
     ) -> None:
         """
         Initializes the Resizer with specific configurations for face
-        detection. This class uses a configurable face-detection backend plus
-        MediaPipe Face Mesh for analyzing mouth movement to determine whose speaking
-        within video frames.
+        detection. This class uses a configurable face-detection backend plus a
+        MediaPipe landmark runtime for analyzing mouth movement to determine who is
+        speaking within video frames.
 
         Parameters
         ----------
@@ -76,6 +78,10 @@ class Resizer:
             full-range.
         mediapipe_face_detect_min_detection_confidence: float, optional
             Minimum MediaPipe face-detection confidence.
+        diarization_model: str, optional
+            Which diarization profile this resize run belongs to. Community runs use
+            the modern MediaPipe Tasks path while legacy runs keep the older
+            MediaPipe Solutions path.
         device: str, optional
             PyTorch device to perform computations on. Ex: 'cpu', 'cuda'. Default is
             None (auto detects the correct device)
@@ -95,9 +101,11 @@ class Resizer:
             mediapipe_face_detect_min_detection_confidence=(
                 mediapipe_face_detect_min_detection_confidence
             ),
+            diarization_model=diarization_model,
         )
-        # media pipe automatically uses gpu if available
-        self._face_mesher = mp.solutions.face_mesh.FaceMesh()
+        self._face_landmarker = build_face_landmarker(
+            diarization_model=diarization_model
+        )
         self._media_editor = MediaEditor()
 
     def resize(
@@ -910,16 +918,9 @@ class Resizer:
         mar: float
             The mouth aspect ratio.
         """
-        results = self._face_mesher.process(face)
-        if results.multi_face_landmarks is None:
+        landmarks = self._face_landmarker.detect(face)
+        if landmarks is None:
             return None
-
-        landmarks = []
-        for landmark in results.multi_face_landmarks[0].landmark:
-            landmarks.append([landmark.x, landmark.y])
-        landmarks = np.array(landmarks)
-        landmarks[:, 0] *= face.shape[1]
-        landmarks[:, 1] *= face.shape[0]
 
         # inner lip
         upper_lip = landmarks[[95, 88, 178, 87, 14, 317, 402, 318, 324], :]
@@ -1025,7 +1026,7 @@ class Resizer:
         """
         self._face_detector.cleanup()
         self._face_detector = None
-        self._face_mesher.close()
-        self._face_mesher = None
+        self._face_landmarker.close()
+        self._face_landmarker = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

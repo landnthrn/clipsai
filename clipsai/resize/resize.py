@@ -138,6 +138,7 @@ def resize(
         mediapipe_face_detect_min_detection_confidence=(
             mediapipe_face_detect_min_detection_confidence
         ),
+        diarization_model=diarization_model,
         device=device,
     )
     crops = resizer.resize(

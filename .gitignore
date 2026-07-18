@@ -203,6 +203,7 @@ test_files/
 input/
 output/
 plans/
+models/mediapipe/
 
 # Ignore macOS system files
 .DS_Store

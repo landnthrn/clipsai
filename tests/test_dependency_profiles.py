@@ -38,9 +38,11 @@ def _read_install_requires() -> list[str]:
 def test_community_requirements_keep_torch_stack_out_of_pip_install():
     requirements = _read_requirement_lines("requirements-community.txt")
 
-    assert "mediapipe==0.10.21" in requirements
+    assert "mediapipe==0.10.35" in requirements
+    assert "numpy>=2,<3" in requirements
     assert "pyannote.audio>=4,<5" in requirements
     assert "pyannote.core>=6,<7" in requirements
+    assert all("numpy<2" not in line for line in requirements)
     assert all(not line.startswith("torch") for line in requirements)
     assert all(not line.startswith("torchaudio") for line in requirements)
     assert all(not line.startswith("torchvision") for line in requirements)
