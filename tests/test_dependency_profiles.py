@@ -48,6 +48,9 @@ def test_community_requirements_keep_torch_stack_out_of_pip_install():
     assert all(not line.startswith("torchvision") for line in requirements)
     assert all(not line.startswith("torchcodec") for line in requirements)
     assert "facenet-pytorch==2.6.0" not in requirements
+    assert 'python-magic-bin; platform_system == "Windows"' in requirements
+    assert 'python-magic; platform_system != "Windows"' in requirements
+    assert "python-magic" not in requirements
 
 
 def test_legacy_requirements_preserve_legacy_diarization_profile():
@@ -60,6 +63,9 @@ def test_legacy_requirements_preserve_legacy_diarization_profile():
     assert all(not line.startswith("torch") for line in requirements)
     assert all(not line.startswith("torchaudio") for line in requirements)
     assert all(not line.startswith("torchvision") for line in requirements)
+    assert 'python-magic-bin; platform_system == "Windows"' in requirements
+    assert 'python-magic; platform_system != "Windows"' in requirements
+    assert "python-magic" not in requirements
 
 
 def test_setup_install_requires_excludes_optional_ml_stacks():
@@ -70,3 +76,11 @@ def test_setup_install_requires_excludes_optional_ml_stacks():
     assert "pyannote.core" not in install_requires
     assert "sentence-transformers" not in install_requires
     assert "torch" not in install_requires
+
+
+def test_setup_install_requires_use_platform_specific_magic_providers():
+    install_requires = _read_install_requires()
+
+    assert 'python-magic-bin; platform_system == "Windows"' in install_requires
+    assert 'python-magic; platform_system != "Windows"' in install_requires
+    assert "python-magic" not in install_requires

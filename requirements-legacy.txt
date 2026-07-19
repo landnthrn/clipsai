@@ -23,7 +23,8 @@ pyannote.audio==3.1.1
 pyannote.core<6
 pynvml
 pytest
-python-magic
+python-magic-bin; platform_system == "Windows"
+python-magic; platform_system != "Windows"
 scenedetect
 scikit-learn
 scipy

@@ -51,6 +51,12 @@ unconditionally anymore.
 If you need the transcription stack, install its extra dependencies separately for the
 environment you want to use.
 
+On Windows, this repo now resolves the `magic` module through `python-magic-bin`
+instead of plain `python-magic`, because the non-binary package expects an external
+`libmagic` installation that is not present in a normal Windows Python environment.
+
+On non-Windows platforms, the repo keeps using `python-magic`.
+
 ### MediaPipe model assets for the Community profile
 
 The modern Community MediaPipe path uses the MediaPipe Tasks Python APIs, which require
