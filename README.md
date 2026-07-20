@@ -73,6 +73,10 @@ Those map to the saved `mediapipe_face_detect_model_selection` value like this:
 - `0` -> `blaze_face_short_range.tflite`
 - `1` -> `blaze_face_full_range_sparse.tflite`
 
+If the MediaPipe model selection is omitted, legacy-style runs keep the short-range
+default while `community-1` runs use the full-range model. Full-range is a better
+default for wider podcast/interview shots where faces are smaller in the frame.
+
 Optional environment-variable overrides:
 
 - `CLIPSAI_MEDIAPIPE_FACE_DETECTOR_MODEL_PATH`
@@ -252,6 +256,10 @@ The analyze step can also save raw pyannote diarization JSON under `plans/raw-di
 > **Note:** This repo's current tested local environment uses `pyannote.audio 3.1.1`, so `legacy-3.1` remains the default runnable model there. `community-1` support is built into the code path, but actually using it requires a `pyannote.audio 4.x` environment plus the required Hugging Face access.
 
 > **Note:** If `--face-detect-backend` is omitted, `legacy-3.1` defaults to `mtcnn` while `community-1` defaults to `mediapipe`. You can still explicitly choose either backend from the CLI or stored plan.
+
+> **Note:** If `--mediapipe-face-detect-model-selection` is omitted, `legacy-3.1`
+> keeps MediaPipe short-range selection `0` while `community-1` uses full-range
+> selection `1`.
 
 > **Note:** `legacy-3.1` keeps the older MediaPipe Solutions face-mesh path. `community-1`
 > now uses the modern MediaPipe Tasks Face Detector plus Face Landmarker path, so it

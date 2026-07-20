@@ -16,8 +16,8 @@ from clipsai.diarize.config import DEFAULT_DIARIZATION_MODEL
 from clipsai.diarize.config import get_supported_diarization_models
 from clipsai.resize.config import DEFAULT_FACE_DETECT_BACKEND
 from clipsai.resize.config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
-from clipsai.resize.config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
 from clipsai.resize.config import get_default_face_detect_backend
+from clipsai.resize.config import get_default_mediapipe_face_detect_model_selection
 from clipsai.resize.config import get_supported_face_detect_backends
 
 PLAN_VERSION = 4
@@ -37,7 +37,6 @@ DEFAULT_MIN_SEGMENT_DURATION = 1.5
 DEFAULT_SAMPLES_PER_SEGMENT = 13
 DEFAULT_FACE_DETECT_WIDTH = 960
 DEFAULT_FACE_DETECT_BACKEND_NAME = DEFAULT_FACE_DETECT_BACKEND
-DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL = DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
 DEFAULT_MEDIAPIPE_FACE_DETECT_CONFIDENCE = (
     DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
 )
@@ -403,7 +402,9 @@ def normalize_plan_data(plan_data: dict) -> dict:
     )
     analysis_data.setdefault(
         "mediapipe_face_detect_model_selection",
-        DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL,
+        get_default_mediapipe_face_detect_model_selection(
+            analysis_data["diarization_model"]
+        ),
     )
     analysis_data.setdefault(
         "mediapipe_face_detect_min_detection_confidence",
@@ -962,7 +963,7 @@ def analyze_video(
     samples_per_segment: int,
     face_detect_width: int,
     face_detect_backend: str | None,
-    mediapipe_face_detect_model_selection: int,
+    mediapipe_face_detect_model_selection: int | None,
     mediapipe_face_detect_min_detection_confidence: float,
     scene_merge_threshold: float,
     diarization_model: str,
@@ -981,6 +982,11 @@ def analyze_video(
         raw_diarization_path = default_raw_diarization_path(video_path, plans_dir)
     face_detect_backend = face_detect_backend or get_default_face_detect_backend(
         diarization_model
+    )
+    mediapipe_face_detect_model_selection = (
+        mediapipe_face_detect_model_selection
+        if mediapipe_face_detect_model_selection is not None
+        else get_default_mediapipe_face_detect_model_selection(diarization_model)
     )
 
     crops = resize(
@@ -1458,8 +1464,11 @@ def build_parser() -> argparse.ArgumentParser:
             "--mediapipe-face-detect-model-selection",
             type=int,
             choices=[0, 1],
-            default=DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL,
-            help="MediaPipe face-detection model selection. 0 = short-range, 1 = full-range.",
+            default=None,
+            help=(
+                "MediaPipe face-detection model selection. 0 = short-range, "
+                "1 = full-range. If omitted, legacy uses 0 and community-1 uses 1."
+            ),
         )
         subparser.add_argument(
             "--mediapipe-face-detect-min-detection-confidence",

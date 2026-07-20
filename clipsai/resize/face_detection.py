@@ -17,6 +17,7 @@ from .config import assert_supported_face_detect_backend
 from .config import DEFAULT_FACE_DETECT_BACKEND
 from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
 from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
+from .config import get_default_mediapipe_face_detect_model_selection
 
 
 COMMUNITY_DIARIZATION_MODEL = "community-1"
@@ -501,9 +502,7 @@ def build_face_detector(
     face_detect_margin: int = 20,
     face_detect_post_process: bool = False,
     device: str = None,
-    mediapipe_face_detect_model_selection: int = (
-        DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
-    ),
+    mediapipe_face_detect_model_selection: int | None = None,
     mediapipe_face_detect_min_detection_confidence: float = (
         DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
     ),
@@ -524,6 +523,11 @@ def build_face_detector(
     detector_cls = LegacyMediaPipeFaceDetector
     if _uses_community_mediapipe_runtime(diarization_model):
         detector_cls = CommunityMediaPipeFaceDetector
+
+    if mediapipe_face_detect_model_selection is None:
+        mediapipe_face_detect_model_selection = (
+            get_default_mediapipe_face_detect_model_selection(diarization_model)
+        )
 
     return detector_cls(
         model_selection=mediapipe_face_detect_model_selection,

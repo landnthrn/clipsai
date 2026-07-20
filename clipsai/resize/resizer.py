@@ -11,7 +11,6 @@ import logging
 # current package imports
 from .config import DEFAULT_FACE_DETECT_BACKEND
 from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
-from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
 from .crops import Crops
 from .exceptions import ResizerError
 from .face_detection import build_face_detector
@@ -46,9 +45,7 @@ class Resizer:
         face_detect_margin: int = 20,
         face_detect_post_process: bool = False,
         face_detect_backend: str = DEFAULT_FACE_DETECT_BACKEND,
-        mediapipe_face_detect_model_selection: int = (
-            DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
-        ),
+        mediapipe_face_detect_model_selection: int | None = None,
         mediapipe_face_detect_min_detection_confidence: float = (
             DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
         ),
@@ -74,8 +71,8 @@ class Resizer:
         face_detect_backend: str, optional
             Which supported face-detection backend should be used.
         mediapipe_face_detect_model_selection: int, optional
-            MediaPipe Face Detection model selection. `0` is short-range and `1` is
-            full-range.
+            MediaPipe Face Detection model selection. `0` is short-range, `1` is
+            full-range, and omitted values use the default for the diarization mode.
         mediapipe_face_detect_min_detection_confidence: float, optional
             Minimum MediaPipe face-detection confidence.
         diarization_model: str, optional

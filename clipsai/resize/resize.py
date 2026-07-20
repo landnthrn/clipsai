@@ -6,8 +6,8 @@ import logging
 
 # current package imports
 from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
-from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
 from .config import get_default_face_detect_backend
+from .config import get_default_mediapipe_face_detect_model_selection
 from .crops import Crops
 from .resizer import Resizer
 from .vid_proc import detect_scenes
@@ -28,9 +28,7 @@ def resize(
     face_detect_margin: int = 20,
     face_detect_post_process: bool = False,
     face_detect_backend: str | None = None,
-    mediapipe_face_detect_model_selection: int = (
-        DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
-    ),
+    mediapipe_face_detect_model_selection: int | None = None,
     mediapipe_face_detect_min_detection_confidence: float = (
         DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
     ),
@@ -72,8 +70,8 @@ def resize(
         Which supported face-detection backend to use. If omitted, the default is
         chosen from the diarization mode.
     mediapipe_face_detect_model_selection: int
-        MediaPipe face-detection model selection. `0` is short-range and `1` is
-        full-range.
+        MediaPipe face-detection model selection. `0` is short-range, `1` is
+        full-range, and omitted values use the default for the diarization mode.
     mediapipe_face_detect_min_detection_confidence: float
         Minimum MediaPipe face-detection confidence.
     n_face_detect_batches: int
@@ -129,6 +127,11 @@ def resize(
     logging.debug("RESIZING VIDEO) ({})".format(media.get_filename()))
     face_detect_backend = face_detect_backend or get_default_face_detect_backend(
         diarization_model
+    )
+    mediapipe_face_detect_model_selection = (
+        mediapipe_face_detect_model_selection
+        if mediapipe_face_detect_model_selection is not None
+        else get_default_mediapipe_face_detect_model_selection(diarization_model)
     )
     resizer = Resizer(
         face_detect_margin=face_detect_margin,
