@@ -13,6 +13,7 @@ from clipsai.reframe import discover_plan_files, discover_video_files
 from clipsai.reframe import format_summary_and_logs_timestamp, get_enabled_segments
 from clipsai.reframe import load_plan
 from clipsai.reframe import normalize_plan_data, original_output_filename
+from clipsai.reframe import read_dotenv_value, resolve_hf_token
 from clipsai.reframe import resolve_output_filename, resolve_render_settings
 from clipsai.resize.crops import Crops
 from clipsai.resize.segment import Segment
@@ -39,6 +40,44 @@ def test_discover_plan_files_from_directory(tmp_path: Path):
         f"one{PLAN_FILE_SUFFIX}",
         f"two{PLAN_FILE_SUFFIX}",
     ]
+
+
+def test_read_dotenv_value_reads_non_empty_value(tmp_path: Path):
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text("HF_TOKEN=abc123\n", encoding="utf-8")
+
+    assert read_dotenv_value("HF_TOKEN", dotenv_paths=[dotenv_path]) == "abc123"
+
+
+def test_read_dotenv_value_ignores_blank_value(tmp_path: Path):
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text("HF_TOKEN=\n", encoding="utf-8")
+
+    assert read_dotenv_value("HF_TOKEN", dotenv_paths=[dotenv_path]) is None
+
+
+def test_resolve_hf_token_uses_local_dotenv_when_environment_is_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text("HF_TOKEN=dotenv-token\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    assert resolve_hf_token(None) == "dotenv-token"
+
+
+def test_resolve_hf_token_prefers_explicit_token_over_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text("HF_TOKEN=dotenv-token\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    assert resolve_hf_token("explicit-token") == "explicit-token"
 
 
 def test_build_plan_contains_expected_shape(tmp_path: Path):

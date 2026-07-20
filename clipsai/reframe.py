@@ -49,6 +49,7 @@ DEFAULT_OUTPUT_SUFFIX = "_vertical"
 DEFAULT_SUMMARY_AND_LOGS_DIRNAME = "summary-and-logs"
 RAW_DIARIZATION_DIRNAME = "raw-diarization"
 RAW_DIARIZATION_FILE_SUFFIX = ".raw-diarization.json"
+DOTENV_FILENAME = ".env"
 
 RENDER_PRESETS = {
     "preview": {
@@ -129,13 +130,53 @@ def discover_plan_files(input_path: str | Path) -> list[Path]:
     return plan_files
 
 
+def dotenv_candidate_paths() -> list[Path]:
+    """
+    Return supported local dotenv locations in lookup order.
+    """
+    package_root = Path(__file__).resolve().parents[1]
+    cwd_path = Path.cwd() / DOTENV_FILENAME
+    package_root_path = package_root / DOTENV_FILENAME
+    if cwd_path.resolve() == package_root_path.resolve():
+        return [cwd_path]
+    return [cwd_path, package_root_path]
+
+
+def read_dotenv_value(key: str, dotenv_paths: list[Path] | None = None) -> str | None:
+    """
+    Read a simple KEY=value entry from local dotenv files.
+    """
+    dotenv_paths = dotenv_paths or dotenv_candidate_paths()
+    for dotenv_path in dotenv_paths:
+        if not dotenv_path.exists():
+            continue
+
+        with dotenv_path.open("r", encoding="utf-8") as file_object:
+            for raw_line in file_object:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+
+                name, value = line.split("=", 1)
+                if name.strip() != key:
+                    continue
+
+                value = value.strip().strip('"').strip("'")
+                if value:
+                    return value
+    return None
+
+
 def resolve_hf_token(explicit_token: str | None) -> str:
     """
-    Resolve the Hugging Face token from argument or environment.
+    Resolve the Hugging Face token from argument, environment, or local dotenv.
     """
-    token = explicit_token or os.environ.get("HF_TOKEN")
+    token = explicit_token or os.environ.get("HF_TOKEN") or read_dotenv_value("HF_TOKEN")
     if not token:
-        raise RuntimeError("HF_TOKEN is not set. Set it in the environment or pass --hf-token.")
+        raise RuntimeError(
+            "HF_TOKEN is not set. Set it in the environment, pass --hf-token, "
+            "or add it to a local .env file."
+        )
     return token
 
 
