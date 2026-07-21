@@ -47,6 +47,10 @@ DEFAULT_SUMMARY_AND_LOGS_DIRNAME = "summary-and-logs"
 RAW_DIARIZATION_DIRNAME = "raw-diarization"
 RAW_DIARIZATION_FILE_SUFFIX = ".raw-diarization.json"
 DOTENV_FILENAME = ".env"
+ENVIRONMENT_DIR_BY_DIARIZATION_MODEL = {
+    "legacy-3.1": "Legacy-env",
+    "community-1": "Reborn-env",
+}
 
 RENDER_PRESETS = {
     "preview": {
@@ -121,10 +125,39 @@ def discover_plan_files(input_path: str | Path) -> list[Path]:
             raise ValueError(f"Unsupported plan file: {path}")
         return [path]
 
-    plan_files = sorted(file_path.resolve() for file_path in path.glob(f"*{PLAN_FILE_SUFFIX}"))
+    plan_files = sorted(
+        file_path.resolve()
+        for file_path in path.rglob(f"*{PLAN_FILE_SUFFIX}")
+        if file_path.is_file()
+    )
     if not plan_files:
         raise FileNotFoundError(f"No plan files found in: {path}")
     return plan_files
+
+
+def environment_dirname_for_diarization_model(diarization_model: str | None) -> str:
+    """
+    Return the stable folder name used for one dependency environment profile.
+    """
+    model_name = diarization_model or DEFAULT_DIARIZATION_MODEL
+    return ENVIRONMENT_DIR_BY_DIARIZATION_MODEL.get(model_name, "Legacy-env")
+
+
+def environment_dirname_from_plan(plan_data: dict) -> str:
+    """
+    Return the environment folder name for a saved plan.
+    """
+    analysis_data = plan_data.get("analysis", {})
+    return environment_dirname_for_diarization_model(
+        analysis_data.get("diarization_model")
+    )
+
+
+def environment_scoped_dir(base_dir: Path, diarization_model: str | None) -> Path:
+    """
+    Return a shared root directory scoped by the selected environment profile.
+    """
+    return base_dir / environment_dirname_for_diarization_model(diarization_model)
 
 
 def dotenv_candidate_paths() -> list[Path]:
@@ -752,13 +785,17 @@ def build_summary_and_logs_batch_root(
     output_dir: Path,
     batch_label: str,
     now: datetime,
+    environment_dirname: str | None = None,
 ) -> Path:
     """
     Build the parent summary/logs folder for one batch render run.
     """
     safe_label = sanitize_summary_and_logs_folder_name(batch_label)
     timestamp = format_summary_and_logs_timestamp(now)
-    return output_dir / DEFAULT_SUMMARY_AND_LOGS_DIRNAME / f"{safe_label}_{timestamp}"
+    logs_root = output_dir / DEFAULT_SUMMARY_AND_LOGS_DIRNAME
+    if environment_dirname:
+        logs_root = logs_root / environment_dirname
+    return logs_root / f"{safe_label}_{timestamp}"
 
 
 def build_summary_and_logs_paths(
@@ -767,6 +804,7 @@ def build_summary_and_logs_paths(
     batch_root: Path | None,
     now: datetime,
     overwrite: bool,
+    environment_dirname: str | None = None,
 ) -> dict[str, Path]:
     """
     Resolve the per-video summary/logs file paths.
@@ -775,7 +813,10 @@ def build_summary_and_logs_paths(
     video_folder_name = sanitize_summary_and_logs_folder_name(
         f"{source_path.stem}_{timestamp}"
     )
-    video_root = (batch_root or (output_dir / DEFAULT_SUMMARY_AND_LOGS_DIRNAME)) / video_folder_name
+    logs_root = output_dir / DEFAULT_SUMMARY_AND_LOGS_DIRNAME
+    if environment_dirname:
+        logs_root = logs_root / environment_dirname
+    video_root = (batch_root or logs_root) / video_folder_name
     if overwrite is False:
         video_root = make_numbered_copy_directory(video_root)
     return {
@@ -1213,6 +1254,7 @@ def render_plan(
     Render one plan JSON file into a vertical video file.
     """
     plan_data = load_plan(plan_path)
+    environment_dirname = environment_dirname_from_plan(plan_data)
     source_path = Path(plan_data["source_path"]).expanduser().resolve()
     if not source_path.exists():
         raise FileNotFoundError(f"Source video from plan does not exist: {source_path}")
@@ -1231,8 +1273,9 @@ def render_plan(
     )
     render_started_at = render_started_at or datetime.now()
     generated_at = render_started_at.strftime("%m/%d/%Y %I:%M %p")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / render_settings["output_name"]
+    output_file_dir = output_dir / environment_dirname
+    output_file_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_file_dir / render_settings["output_name"]
     if render_settings["overwrite"] is False:
         output_path = make_numbered_copy_path(output_path)
         render_settings["output_name"] = output_path.name
@@ -1243,9 +1286,10 @@ def render_plan(
         batch_root=summary_and_logs_batch_root,
         now=render_started_at,
         overwrite=render_settings["overwrite"],
+        environment_dirname=environment_dirname,
     )
 
-    temp_dir = output_dir / f"{source_path.stem}_temp_segments"
+    temp_dir = output_file_dir / f"{source_path.stem}_temp_segments"
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -1376,7 +1420,8 @@ def analyze_command(args: argparse.Namespace) -> int:
     """
     hf_token = resolve_hf_token(args.hf_token)
     video_files = discover_video_files(args.input)
-    plans_dir = Path(args.plans_dir).expanduser().resolve()
+    plans_root = Path(args.plans_dir).expanduser().resolve()
+    plans_dir = environment_scoped_dir(plans_root, args.diarization_model)
     for video_path in video_files:
         plan_path = analyze_video(
             video_path=video_path,
@@ -1416,18 +1461,29 @@ def render_command(args: argparse.Namespace) -> int:
     input_path = Path(args.input).expanduser().resolve()
     plan_files = discover_plan_files(input_path)
     render_started_at = datetime.now()
-    summary_and_logs_batch_root = None
+    summary_and_logs_batch_roots: dict[str, Path] = {}
+    batch_label = None
     if input_path.is_dir():
         batch_label = infer_batch_summary_and_logs_label(
             plan_files=plan_files,
             input_path=input_path,
         )
-        summary_and_logs_batch_root = build_summary_and_logs_batch_root(
-            output_dir=output_dir,
-            batch_label=batch_label,
-            now=render_started_at,
-        )
     for plan_path in plan_files:
+        summary_and_logs_batch_root = None
+        if batch_label is not None:
+            environment_dirname = environment_dirname_from_plan(load_plan(plan_path))
+            if environment_dirname not in summary_and_logs_batch_roots:
+                summary_and_logs_batch_roots[environment_dirname] = (
+                    build_summary_and_logs_batch_root(
+                        output_dir=output_dir,
+                        batch_label=batch_label,
+                        now=render_started_at,
+                        environment_dirname=environment_dirname,
+                    )
+                )
+            summary_and_logs_batch_root = summary_and_logs_batch_roots[
+                environment_dirname
+            ]
         output_path = render_plan(
             plan_path=plan_path,
             output_dir=output_dir,
@@ -1447,8 +1503,9 @@ def run_command_handler(args: argparse.Namespace) -> int:
     CLI handler for simple analyze-then-render mode.
     """
     analyze_command(args)
+    plans_root = Path(args.plans_dir).expanduser().resolve()
     render_args = argparse.Namespace(
-        input=args.plans_dir,
+        input=str(environment_scoped_dir(plans_root, args.diarization_model)),
         output_dir=args.output_dir,
         render_preset=None,
         output_width=None,
@@ -1472,7 +1529,10 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument(
             "--plans-dir",
             default="plans",
-            help="Where editable JSON plans should be written.",
+            help=(
+                "Shared root where editable JSON plans should be written. "
+                "Plans are stored under Legacy-env or Reborn-env inside this root."
+            ),
         )
         subparser.add_argument(
             "--output-width",
@@ -1606,7 +1666,10 @@ def build_parser() -> argparse.ArgumentParser:
     render_parser.add_argument(
         "--output-dir",
         default="output",
-        help="Where rendered videos should be written.",
+        help=(
+            "Shared root where rendered videos should be written. Outputs are "
+            "stored under Legacy-env or Reborn-env inside this root."
+        ),
     )
     render_parser.add_argument(
         "--render-preset",
@@ -1642,7 +1705,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--output-dir",
         default="output",
-        help="Where rendered videos should be written.",
+        help=(
+            "Shared root where rendered videos should be written. Outputs are "
+            "stored under Legacy-env or Reborn-env inside this root."
+        ),
     )
     run_parser.set_defaults(handler=run_command_handler)
 

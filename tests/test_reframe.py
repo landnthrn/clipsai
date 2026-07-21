@@ -6,16 +6,21 @@ import pytest
 from clipsai.reframe import PLAN_FILE_SUFFIX, PLAN_VERSION, build_plan
 from clipsai.reframe import build_render_media_file, build_render_summary_markdown
 from clipsai.reframe import build_summary_and_logs_batch_root
+from clipsai.reframe import build_summary_and_logs_paths
 from clipsai.reframe import build_summary_and_logs_payload, build_timeline_csv_rows
 from clipsai.reframe import create_crops_from_plan, default_output_path, default_plan_path
 from clipsai.reframe import default_raw_diarization_path
 from clipsai.reframe import discover_plan_files, discover_video_files
+from clipsai.reframe import environment_dirname_for_diarization_model
+from clipsai.reframe import environment_scoped_dir
 from clipsai.reframe import format_summary_and_logs_timestamp, get_enabled_segments
 from clipsai.reframe import load_plan
 from clipsai.reframe import make_numbered_copy_directory, make_numbered_copy_path
 from clipsai.reframe import normalize_plan_data, original_output_filename
 from clipsai.reframe import read_dotenv_value, resolve_hf_token
+from clipsai.reframe import render_plan
 from clipsai.reframe import resolve_output_filename, resolve_render_settings
+from clipsai.reframe import store_plan
 from clipsai.resize.crops import Crops
 from clipsai.resize.segment import Segment
 
@@ -32,12 +37,14 @@ def test_discover_video_files_from_directory(tmp_path: Path):
 
 def test_discover_plan_files_from_directory(tmp_path: Path):
     (tmp_path / f"one{PLAN_FILE_SUFFIX}").write_text("{}", encoding="utf-8")
-    (tmp_path / f"two{PLAN_FILE_SUFFIX}").write_text("{}", encoding="utf-8")
+    nested_dir = tmp_path / "Reborn-env"
+    nested_dir.mkdir()
+    (nested_dir / f"two{PLAN_FILE_SUFFIX}").write_text("{}", encoding="utf-8")
     (tmp_path / "ignore.json").write_text("{}", encoding="utf-8")
 
     results = discover_plan_files(tmp_path)
 
-    assert [file_path.name for file_path in results] == [
+    assert sorted(file_path.name for file_path in results) == [
         f"one{PLAN_FILE_SUFFIX}",
         f"two{PLAN_FILE_SUFFIX}",
     ]
@@ -193,6 +200,15 @@ def test_default_paths(tmp_path: Path):
     assert plan_path.name == f"episode01{PLAN_FILE_SUFFIX}"
     assert output_path.name == "episode01_vertical.mp4"
     assert raw_diarization_path.name == "episode01.raw-diarization.json"
+
+
+def test_environment_scoped_dirs_use_stable_profile_folder_names(tmp_path: Path):
+    assert environment_dirname_for_diarization_model("legacy-3.1") == "Legacy-env"
+    assert environment_dirname_for_diarization_model("community-1") == "Reborn-env"
+    assert (
+        environment_scoped_dir(tmp_path / "plans", "community-1")
+        == tmp_path / "plans" / "Reborn-env"
+    )
 
 
 def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
@@ -592,6 +608,42 @@ def test_build_summary_and_logs_batch_root_uses_batch_label_and_timestamp(tmp_pa
         == tmp_path / "output" / "summary-and-logs" / "Podcast EP2_6;32PM_07-16"
     )
 
+    reborn_batch_root = build_summary_and_logs_batch_root(
+        output_dir=tmp_path / "output",
+        batch_label="Podcast EP2",
+        now=datetime(2026, 7, 16, 18, 32),
+        environment_dirname="Reborn-env",
+    )
+
+    assert (
+        reborn_batch_root
+        == tmp_path
+        / "output"
+        / "summary-and-logs"
+        / "Reborn-env"
+        / "Podcast EP2_6;32PM_07-16"
+    )
+
+
+def test_build_summary_and_logs_paths_uses_environment_folder(tmp_path: Path):
+    export_paths = build_summary_and_logs_paths(
+        source_path=tmp_path / "episode01.mp4",
+        output_dir=tmp_path / "output",
+        batch_root=None,
+        now=datetime(2026, 7, 16, 18, 32),
+        overwrite=True,
+        environment_dirname="Legacy-env",
+    )
+
+    assert (
+        export_paths["video_root"]
+        == tmp_path
+        / "output"
+        / "summary-and-logs"
+        / "Legacy-env"
+        / "episode01_6;32PM_07-16"
+    )
+
 
 def test_build_timeline_csv_rows_marks_enabled_and_disabled_segments():
     rows = build_timeline_csv_rows(
@@ -715,6 +767,84 @@ def test_build_summary_and_logs_payload_contains_file_render_and_segment_details
     assert payload["segments"]["rendered_start_time"] == 0.0
     assert payload["segments"]["rendered_end_time"] == 5.0
     assert payload["segments"]["timeline_rows"][1]["status"] == "disabled"
+
+
+def test_render_plan_routes_output_and_logs_by_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source_path = tmp_path / "episode01.mp4"
+    source_path.write_text("video", encoding="utf-8")
+    plan_path = tmp_path / "plans" / "Reborn-env" / f"episode01{PLAN_FILE_SUFFIX}"
+    plan_data = {
+        "plan_version": PLAN_VERSION,
+        "source_path": str(source_path),
+        "source_filename": source_path.name,
+        "analysis": {
+            "original_width": 1920,
+            "original_height": 1080,
+            "crop_width": 607,
+            "crop_height": 1080,
+            "aspect_ratio": [9, 16],
+            "diarization_model": "community-1",
+            "num_speakers": 2,
+            "min_speakers": None,
+            "max_speakers": None,
+            "face_detect_backend": "mediapipe",
+            "mediapipe_face_detect_model_selection": 1,
+            "mediapipe_face_detect_min_detection_confidence": 0.3,
+            "raw_diarization_path": None,
+        },
+        "render": {
+            "mode": "preset",
+            "preset_name": "preview",
+            "output_name_mode": "suffix",
+            "output_suffix": "_vertical",
+            "output_width": 1080,
+            "output_height": 1920,
+            "overwrite": False,
+            "output_summary_and_logs": True,
+        },
+        "segments": [
+            {
+                "segment_id": "segment_0001",
+                "enabled": True,
+                "speakers": [0],
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "x": 100,
+                "y": 0,
+                "notes": "",
+            }
+        ],
+    }
+    store_plan(plan_path, plan_data)
+
+    class FakeMediaFile:
+        def get_width_pixels(self):
+            return 1920
+
+        def get_height_pixels(self):
+            return 1080
+
+    monkeypatch.setattr("clipsai.reframe.build_render_media_file", lambda path: FakeMediaFile())
+    monkeypatch.setattr("clipsai.reframe.run_command", lambda command: None)
+
+    output_path = render_plan(
+        plan_path=plan_path,
+        output_dir=tmp_path / "output",
+        render_started_at=datetime(2026, 7, 16, 18, 32),
+    )
+
+    assert output_path == tmp_path / "output" / "Reborn-env" / "episode01_vertical.mp4"
+    assert (
+        tmp_path
+        / "output"
+        / "summary-and-logs"
+        / "Reborn-env"
+        / "episode01_6;32PM_07-16"
+        / "summary.md"
+    ).exists()
 
 
 def test_build_render_media_file_uses_audiovideo_for_sources_with_audio(tmp_path: Path):

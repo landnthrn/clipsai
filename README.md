@@ -171,6 +171,14 @@ Each plan now stores:
 - analysis settings such as diarization model, optional speaker-count constraints, face-detection backend choice, and optional raw diarization save path
 - render settings such as preset/custom mode, naming mode, suffix, size, overwrite behavior, and optional summary/logs export
 
+The `plans` and `output` arguments are shared roots. ClipsAI automatically stores
+environment-specific files under:
+
+- `plans/Legacy-env/` and `output/Legacy-env/` for `legacy-3.1`
+- `plans/Reborn-env/` and `output/Reborn-env/` for `community-1`
+- `output/summary-and-logs/Legacy-env/` and `output/summary-and-logs/Reborn-env/`
+  for render summaries and logs
+
 Analyze only:
 
 ```bash
@@ -269,7 +277,7 @@ Example render naming fields:
 }
 ```
 
-If `output_summary_and_logs` is set to `true`, render writes a per-video folder under `output/summary-and-logs/` with:
+If `output_summary_and_logs` is set to `true`, render writes a per-video folder under the matching environment folder inside `output/summary-and-logs/` with:
 
 - `summary.md`
 - `full-record.json`
@@ -286,7 +294,7 @@ The summary markdown includes:
 - the enabled versus disabled segment summary
 - an exact per-cut timeline with decimal start, end, duration, crop reason, face side, mouth movement, and landmark-frame values
 
-The analyze step can also save raw pyannote diarization JSON under `plans/raw-diarization/` when `--save-raw-diarization` is enabled.
+The analyze step can also save raw pyannote diarization JSON under the matching environment folder, such as `plans/Legacy-env/raw-diarization/` or `plans/Reborn-env/raw-diarization/`, when `--save-raw-diarization` is enabled.
 
 > **Note:** This repo's current tested local environment uses `pyannote.audio 3.1.1`, so `legacy-3.1` remains the default runnable model there. `community-1` support is built into the code path, but actually using it requires a `pyannote.audio 4.x` environment plus the required Hugging Face access.
 
