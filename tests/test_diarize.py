@@ -93,7 +93,10 @@ def mock_audio_file():
 
 
 def test_pyannote_diarizer_uses_selected_pipeline_checkpoint():
-    with patch("pyannote.audio.Pipeline.from_pretrained", return_value=Mock()) as pipeline_loader:
+    with patch(
+        "clipsai.diarize.pyannote.get_pyannote_audio_major_version",
+        return_value=3,
+    ), patch("pyannote.audio.Pipeline.from_pretrained", return_value=Mock()) as pipeline_loader:
         PyannoteDiarizer(auth_token="mock_token", diarization_model="legacy-3.1")
 
     pipeline_loader.assert_called_once_with(
@@ -275,6 +278,42 @@ def test_diarize_passes_speaker_count_kwargs_and_writes_raw_output(
     assert saved_payload["model_name"] == "legacy-3.1"
     assert saved_payload["speaker_count_constraints"] == {"num_speakers": 2}
     assert len(saved_payload["speaker_diarization"]) == 2
+
+
+def test_diarize_prefers_exclusive_speaker_timeline_when_available(
+    mock_diarizer,
+    mock_audio_file,
+):
+    regular_annotation = Annotation().from_df(
+        pd.DataFrame(
+            [
+                {"segment": Segment(0, 30), "label": "speaker_1", "track": "_"},
+            ]
+        )
+    )
+    exclusive_annotation = Annotation().from_df(
+        pd.DataFrame(
+            [
+                {"segment": Segment(0, 5), "label": "speaker_1", "track": "_"},
+                {"segment": Segment(5, 20), "label": "speaker_0", "track": "_"},
+                {"segment": Segment(20, 30), "label": "speaker_1", "track": "_"},
+            ]
+        )
+    )
+
+    class WrappedOutput:
+        speaker_diarization = regular_annotation
+        exclusive_speaker_diarization = exclusive_annotation
+
+    mock_diarizer.pipeline.return_value = WrappedOutput()
+
+    output_segments = mock_diarizer.diarize(mock_audio_file)
+
+    assert output_segments == [
+        {"speakers": [1], "start_time": 0, "end_time": 5},
+        {"speakers": [0], "start_time": 5, "end_time": 20},
+        {"speakers": [1], "start_time": 20, "end_time": 30},
+    ]
 
 
 def test_serialize_annotation_returns_plain_rows():

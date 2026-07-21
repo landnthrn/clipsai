@@ -46,7 +46,7 @@ def test_build_face_detector_selects_community_mediapipe_backend():
     assert detector is sentinel
     detector_cls.assert_called_once_with(
         model_selection=1,
-        min_detection_confidence=0.5,
+        min_detection_confidence=0.3,
     )
 
 
@@ -356,8 +356,26 @@ def test_community_mediapipe_default_uses_full_range_model():
     )
 
 
+def test_community_mediapipe_default_uses_lower_detection_confidence():
+    assert (
+        face_detection.get_default_mediapipe_face_detect_min_detection_confidence(
+            "community-1"
+        )
+        == 0.3
+    )
+
+
 def test_legacy_mediapipe_default_keeps_short_range_model():
     assert (
         face_detection.get_default_mediapipe_face_detect_model_selection("legacy-3.1")
         == 0
+    )
+
+
+def test_legacy_mediapipe_default_keeps_conservative_detection_confidence():
+    assert (
+        face_detection.get_default_mediapipe_face_detect_min_detection_confidence(
+            "legacy-3.1"
+        )
+        == 0.5
     )

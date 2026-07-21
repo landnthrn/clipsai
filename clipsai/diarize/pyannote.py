@@ -315,8 +315,9 @@ class PyannoteDiarizer:
                 }
                 write_raw_diarization_payload(raw_output_path, raw_payload)
 
+            adjusted_annotation = exclusive_speaker_diarization or pyannote_segments
             adjusted_speaker_segments = self._adjust_segments(
-                pyannote_segments=pyannote_segments,
+                pyannote_segments=adjusted_annotation,
                 min_segment_duration=min_segment_duration,
                 duration=audio_file.get_duration(),
                 time_precision=time_precision,

@@ -17,6 +17,7 @@ from .config import assert_supported_face_detect_backend
 from .config import DEFAULT_FACE_DETECT_BACKEND
 from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
 from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MODEL_SELECTION
+from .config import get_default_mediapipe_face_detect_min_detection_confidence
 from .config import get_default_mediapipe_face_detect_model_selection
 
 
@@ -503,9 +504,7 @@ def build_face_detector(
     face_detect_post_process: bool = False,
     device: str = None,
     mediapipe_face_detect_model_selection: int | None = None,
-    mediapipe_face_detect_min_detection_confidence: float = (
-        DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
-    ),
+    mediapipe_face_detect_min_detection_confidence: float | None = None,
     diarization_model: str = DEFAULT_DIARIZATION_MODEL,
 ):
     """
@@ -527,6 +526,12 @@ def build_face_detector(
     if mediapipe_face_detect_model_selection is None:
         mediapipe_face_detect_model_selection = (
             get_default_mediapipe_face_detect_model_selection(diarization_model)
+        )
+    if mediapipe_face_detect_min_detection_confidence is None:
+        mediapipe_face_detect_min_detection_confidence = (
+            get_default_mediapipe_face_detect_min_detection_confidence(
+                diarization_model
+            )
         )
 
     return detector_cls(

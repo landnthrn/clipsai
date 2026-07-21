@@ -5,8 +5,8 @@ Resize an asset's media to a 9:16 aspect ratio.
 import logging
 
 # current package imports
-from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
 from .config import get_default_face_detect_backend
+from .config import get_default_mediapipe_face_detect_min_detection_confidence
 from .config import get_default_mediapipe_face_detect_model_selection
 from .crops import Crops
 from .resizer import Resizer
@@ -29,9 +29,7 @@ def resize(
     face_detect_post_process: bool = False,
     face_detect_backend: str | None = None,
     mediapipe_face_detect_model_selection: int | None = None,
-    mediapipe_face_detect_min_detection_confidence: float = (
-        DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
-    ),
+    mediapipe_face_detect_min_detection_confidence: float | None = None,
     n_face_detect_batches: int = 8,
     min_scene_duration: float = 0.25,
     scene_merge_threshold: float = 0.25,
@@ -132,6 +130,13 @@ def resize(
         mediapipe_face_detect_model_selection
         if mediapipe_face_detect_model_selection is not None
         else get_default_mediapipe_face_detect_model_selection(diarization_model)
+    )
+    mediapipe_face_detect_min_detection_confidence = (
+        mediapipe_face_detect_min_detection_confidence
+        if mediapipe_face_detect_min_detection_confidence is not None
+        else get_default_mediapipe_face_detect_min_detection_confidence(
+            diarization_model
+        )
     )
     resizer = Resizer(
         face_detect_margin=face_detect_margin,

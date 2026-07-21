@@ -266,6 +266,7 @@ def test_normalize_plan_data_defaults_community_runs_to_mediapipe(tmp_path: Path
 
     assert normalized["analysis"]["face_detect_backend"] == "mediapipe"
     assert normalized["analysis"]["mediapipe_face_detect_model_selection"] == 1
+    assert normalized["analysis"]["mediapipe_face_detect_min_detection_confidence"] == 0.3
 
 
 def test_load_plan_rewrites_old_toggle_fields_to_new_shape(tmp_path: Path):

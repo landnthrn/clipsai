@@ -10,7 +10,7 @@ import logging
 
 # current package imports
 from .config import DEFAULT_FACE_DETECT_BACKEND
-from .config import DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
+from .config import get_default_mediapipe_face_detect_min_detection_confidence
 from .crops import Crops
 from .exceptions import ResizerError
 from .face_detection import build_face_detector
@@ -46,9 +46,7 @@ class Resizer:
         face_detect_post_process: bool = False,
         face_detect_backend: str = DEFAULT_FACE_DETECT_BACKEND,
         mediapipe_face_detect_model_selection: int | None = None,
-        mediapipe_face_detect_min_detection_confidence: float = (
-            DEFAULT_MEDIAPIPE_FACE_DETECT_MIN_DETECTION_CONFIDENCE
-        ),
+        mediapipe_face_detect_min_detection_confidence: float | None = None,
         diarization_model: str = DEFAULT_DIARIZATION_MODEL,
         device: str = None,
     ) -> None:
@@ -89,6 +87,12 @@ class Resizer:
         logging.debug("Face-detection backend '{}' using device: {}".format(face_detect_backend, device))
 
         self._face_detect_backend = face_detect_backend
+        if mediapipe_face_detect_min_detection_confidence is None:
+            mediapipe_face_detect_min_detection_confidence = (
+                get_default_mediapipe_face_detect_min_detection_confidence(
+                    diarization_model
+                )
+            )
         self._face_detector = build_face_detector(
             backend_name=face_detect_backend,
             face_detect_margin=face_detect_margin,
@@ -628,6 +632,7 @@ class Resizer:
         )
         segments_per_batch = int(num_segments // n_batches + 1)
         segments_with_xy_coords = []
+        speaker_face_centers: dict[int, float] = {}
         for i in range(n_batches):
             logging.debug("Analyzing batch {} of {}.".format(i, n_batches))
             cur_segments = segments[
@@ -644,6 +649,7 @@ class Resizer:
                 resize_height=resize_height,
                 samples_per_segment=samples_per_segment,
                 face_detect_width=face_detect_width,
+                speaker_face_centers=speaker_face_centers,
             )
         return segments_with_xy_coords
 
@@ -655,6 +661,7 @@ class Resizer:
         resize_height: int,
         samples_per_segment: int,
         face_detect_width: int,
+        speaker_face_centers: dict[int, float],
     ) -> list[dict]:
         """
         Add the x and y coordinates to resize each segment to for a given batch.
@@ -735,6 +742,8 @@ class Resizer:
                 roi = self._calc_segment_roi(
                     frames=frames[idx : idx + segment["num_samples"]],
                     face_detections=face_detections[idx : idx + segment["num_samples"]],
+                    speakers=segment.get("speakers", []),
+                    speaker_face_centers=speaker_face_centers,
                 )
                 idx += segment["num_samples"]
                 del segment["num_samples"]
@@ -761,6 +770,8 @@ class Resizer:
         self,
         frames: list[np.ndarray],
         face_detections: list[np.ndarray],
+        speakers: list[int] | None = None,
+        speaker_face_centers: dict[int, float] | None = None,
     ) -> Rect:
         """
         Find the region of interest (ROI) for a given segment.
@@ -777,7 +788,10 @@ class Resizer:
         Rect
             The region of interest (ROI) for the segment.
         """
-        segment_roi = None
+        speakers = speakers or []
+        speaker_face_centers = (
+            speaker_face_centers if speaker_face_centers is not None else {}
+        )
 
         # preprocessing for kmeans
         bounding_boxes: list[np.ndarray] = []
@@ -799,6 +813,11 @@ class Resizer:
             box = np.mean(bounding_boxes, axis=0).astype(np.int16)
             x1, y1, x2, y2 = box
             segment_roi = Rect(x1, y1, x2 - x1, y2 - y1)
+            self._remember_single_speaker_face(
+                speakers=speakers,
+                speaker_face_centers=speaker_face_centers,
+                roi=segment_roi,
+            )
             return segment_roi
 
         # use kmeans to group the same bounding boxes together
@@ -819,34 +838,111 @@ class Resizer:
                 )
                 kmeans_idx += 1
 
-        # find the face who's mouth moves the most
-        max_mouth_movement = 0
+        roi_candidates = []
         for bounding_box_group in bounding_box_groups:
             mouth_movement, roi = self._calc_mouth_movement(bounding_box_group, frames)
-            if mouth_movement > max_mouth_movement:
-                max_mouth_movement = mouth_movement
-                segment_roi = roi
+            roi_candidates.append(
+                {
+                    "mouth_movement": mouth_movement,
+                    "frame_count": len(bounding_box_group),
+                    "roi": roi,
+                }
+            )
 
-        # no mouth movement detected -> choose face with the most frames
-        if segment_roi is None:
-            logging.debug("No mouth movement detected for segment.")
-            max_frames = 0
-            for bounding_box_group in bounding_box_groups:
-                if len(bounding_box_group) > max_frames:
-                    max_frames = len(bounding_box_group)
-                    avg_box = np.array([0, 0, 0, 0])
-                    for bounding_box_data in bounding_box_group:
-                        avg_box += bounding_box_data["bounding_box"]
-                    avg_box = avg_box / len(bounding_box_group)
-                    avg_box = avg_box.astype(np.int16)
-                    segment_roi = Rect(
-                        avg_box[0],
-                        avg_box[1],
-                        avg_box[2] - avg_box[0],
-                        avg_box[3] - avg_box[1],
-                    )
+        segment_roi = self._select_segment_roi_candidate(
+            roi_candidates=roi_candidates,
+            speakers=speakers,
+            speaker_face_centers=speaker_face_centers,
+        )
 
         return segment_roi
+
+    def _select_segment_roi_candidate(
+        self,
+        roi_candidates: list[dict],
+        speakers: list[int],
+        speaker_face_centers: dict[int, float],
+    ) -> Rect:
+        """
+        Choose a face ROI using mouth movement first and speaker continuity second.
+        """
+        max_mouth_movement = max(
+            candidate["mouth_movement"] for candidate in roi_candidates
+        )
+        if max_mouth_movement > 0:
+            selected_candidate = max(
+                roi_candidates,
+                key=lambda candidate: candidate["mouth_movement"],
+            )
+        else:
+            logging.debug("No mouth movement detected for segment.")
+            selected_candidate = self._select_no_mouth_movement_roi_candidate(
+                roi_candidates=roi_candidates,
+                speakers=speakers,
+                speaker_face_centers=speaker_face_centers,
+            )
+
+        selected_roi = selected_candidate["roi"]
+        self._remember_single_speaker_face(
+            speakers=speakers,
+            speaker_face_centers=speaker_face_centers,
+            roi=selected_roi,
+        )
+        return selected_roi
+
+    def _select_no_mouth_movement_roi_candidate(
+        self,
+        roi_candidates: list[dict],
+        speakers: list[int],
+        speaker_face_centers: dict[int, float],
+    ) -> dict:
+        """
+        Pick a stable face when landmarks cannot identify the active speaker.
+        """
+        if len(speakers) == 1:
+            speaker = int(speakers[0])
+            if speaker in speaker_face_centers:
+                return min(
+                    roi_candidates,
+                    key=lambda candidate: abs(
+                        self._roi_center_x(candidate["roi"])
+                        - speaker_face_centers[speaker]
+                    ),
+                )
+
+            if speaker_face_centers:
+                known_centers = list(speaker_face_centers.values())
+                return max(
+                    roi_candidates,
+                    key=lambda candidate: (
+                        min(
+                            abs(self._roi_center_x(candidate["roi"]) - known_center)
+                            for known_center in known_centers
+                        ),
+                        candidate["frame_count"],
+                    ),
+                )
+
+        return max(roi_candidates, key=lambda candidate: candidate["frame_count"])
+
+    def _remember_single_speaker_face(
+        self,
+        speakers: list[int],
+        speaker_face_centers: dict[int, float],
+        roi: Rect,
+    ) -> None:
+        """
+        Store the selected face position for single-speaker segments.
+        """
+        if len(speakers) != 1:
+            return
+        speaker_face_centers[int(speakers[0])] = self._roi_center_x(roi)
+
+    def _roi_center_x(self, roi: Rect) -> float:
+        """
+        Return the horizontal center of one ROI.
+        """
+        return float(roi.x + roi.width / 2)
 
     def _calc_mouth_movement(
         self,
@@ -992,6 +1088,13 @@ class Resizer:
         video_height = video_file.get_height_pixels()
 
         for _ in range(len(segments) - 1):
+            cur_speakers = segments[idx].get("speakers")
+            next_speakers = segments[idx + 1].get("speakers")
+            if cur_speakers is not None and next_speakers is not None:
+                if cur_speakers != next_speakers:
+                    idx += 1
+                    continue
+
             cur_x = segments[idx]["x"]
             next_x = segments[idx + 1]["x"]
             x_diff = abs(cur_x - next_x)

@@ -272,6 +272,40 @@ def test_calc_n_batches_treats_mediapipe_as_cpu_side_detection():
     assert n_batches == 1
 
 
+def test_no_mouth_movement_prefers_known_face_for_same_speaker():
+    resizer = build_test_resizer()
+    left_roi = Rect(300, 100, 100, 100)
+    right_roi = Rect(1000, 100, 100, 100)
+
+    selected = resizer._select_no_mouth_movement_roi_candidate(
+        roi_candidates=[
+            {"roi": right_roi, "frame_count": 8, "mouth_movement": 0},
+            {"roi": left_roi, "frame_count": 4, "mouth_movement": 0},
+        ],
+        speakers=[1],
+        speaker_face_centers={1: 350},
+    )
+
+    assert selected["roi"] == left_roi
+
+
+def test_no_mouth_movement_prefers_unclaimed_face_for_new_speaker():
+    resizer = build_test_resizer()
+    left_roi = Rect(300, 100, 100, 100)
+    right_roi = Rect(1000, 100, 100, 100)
+
+    selected = resizer._select_no_mouth_movement_roi_candidate(
+        roi_candidates=[
+            {"roi": left_roi, "frame_count": 20, "mouth_movement": 0},
+            {"roi": right_roi, "frame_count": 5, "mouth_movement": 0},
+        ],
+        speakers=[0],
+        speaker_face_centers={1: 350},
+    )
+
+    assert selected["roi"] == right_roi
+
+
 @pytest.mark.parametrize(
     "roi, resize_width, resize_height, expected_crop",
     [
@@ -360,3 +394,18 @@ def test_merge_identical_segments(segments, expected):
     resizer = build_test_resizer()
     merged_segments = resizer._merge_identical_segments(segments, mock_video_file)
     assert merged_segments == expected
+
+
+def test_merge_identical_segments_preserves_different_speakers():
+    mock_video_file = MagicMock(spec=VideoFile)
+    mock_video_file.get_width_pixels.return_value = 1000
+    mock_video_file.get_height_pixels.return_value = 1000
+    segments = [
+        {"speakers": [1], "x": 100, "y": 0, "start_time": 0, "end_time": 10},
+        {"speakers": [0], "x": 101, "y": 0, "start_time": 10, "end_time": 20},
+    ]
+
+    resizer = build_test_resizer()
+    merged_segments = resizer._merge_identical_segments(segments, mock_video_file)
+
+    assert merged_segments == segments
