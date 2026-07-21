@@ -202,7 +202,10 @@ clipsai/data
 test_files/
 input/
 output/
+output-*/
 plans/
+plans-*/
+diagnostics/
 models/mediapipe/
 
 # Ignore macOS system files
