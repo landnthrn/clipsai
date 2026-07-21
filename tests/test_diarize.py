@@ -117,13 +117,16 @@ def test_pyannote_diarizer_uses_community_pipeline_on_pyannote_4():
     ), patch(
         "pyannote.audio.Pipeline.from_pretrained",
         return_value=pipeline_instance,
-    ) as pipeline_loader:
+    ) as pipeline_loader, patch(
+        "clipsai.diarize.pyannote.configure_ffmpeg_dll_directory",
+    ) as ffmpeg_config:
         diarizer = PyannoteDiarizer(
             auth_token="mock_token",
             diarization_model="community-1",
         )
 
     assert diarizer.model_name == "community-1"
+    ffmpeg_config.assert_called_once_with(required=True)
     pipeline_loader.assert_called_once_with(
         DIARIZATION_MODELS["community-1"]["checkpoint"],
         token="mock_token",
@@ -134,7 +137,7 @@ def test_pyannote_diarizer_blocks_community_model_on_old_pyannote():
     with patch(
         "clipsai.diarize.pyannote.get_pyannote_audio_major_version",
         return_value=3,
-    ):
+    ), patch("clipsai.diarize.pyannote.configure_ffmpeg_dll_directory"):
         with pytest.raises(RuntimeError, match="requires pyannote.audio 4.x"):
             PyannoteDiarizer(auth_token="mock_token", diarization_model="community-1")
 

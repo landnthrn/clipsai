@@ -26,7 +26,11 @@ import uuid
 from .config import DEFAULT_DIARIZATION_MODEL
 from .config import get_diarization_model_config
 from clipsai.media.audio_file import AudioFile
+from clipsai.utils.ffmpeg import configure_ffmpeg_dll_directory
 from clipsai.utils.pytorch import get_compute_device, assert_compute_device_available
+
+# Configure opportunistically before pyannote imports TorchCodec-dependent readers.
+configure_ffmpeg_dll_directory()
 
 # third party imports
 import pyannote.audio
@@ -223,6 +227,8 @@ class PyannoteDiarizer:
                 f"{required_pyannote_major}.x or newer, but this environment has "
                 f"{pyannote.audio.__version__}."
             )
+        if required_pyannote_major >= 4:
+            configure_ffmpeg_dll_directory(required=True)
 
         self.pipeline = Pipeline.from_pretrained(
             self.pipeline_checkpoint,

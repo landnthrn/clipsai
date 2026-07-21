@@ -66,6 +66,22 @@ instead of plain `python-magic`, because the non-binary package expects an exter
 
 On non-Windows platforms, the repo keeps using `python-magic`.
 
+### Windows FFmpeg shared DLLs for Community audio
+
+On Windows, `pyannote.audio` 4.x uses TorchCodec for audio reading. TorchCodec needs a
+full/shared FFmpeg build whose `bin` folder contains shared DLL files such as
+`avcodec*.dll`, `avformat*.dll`, and `avutil*.dll`. An EXE-only or static FFmpeg folder
+with just `ffmpeg.exe`, `ffplay.exe`, and `ffprobe.exe` is not enough.
+
+If ClipsAI cannot auto-detect that folder, set this before running Community analysis:
+
+```powershell
+$env:CLIPSAI_FFMPEG_DLL_DIR = "C:\path\to\ffmpeg-full-shared\bin"
+```
+
+This setting is only needed for Windows audio loading. It does not change Torch,
+TorchCodec, pyannote, MediaPipe, CUDA, or any model assets.
+
 ### MediaPipe model assets for the Community profile
 
 The modern Community MediaPipe path uses the MediaPipe Tasks Python APIs, which require
