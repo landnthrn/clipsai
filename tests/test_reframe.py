@@ -13,7 +13,7 @@ from clipsai.reframe import discover_plan_files, discover_video_files
 from clipsai.reframe import format_summary_and_logs_timestamp, get_enabled_segments
 from clipsai.reframe import load_plan
 from clipsai.reframe import normalize_plan_data, original_output_filename
-from clipsai.reframe import read_dotenv_value, resolve_hf_token
+from clipsai.reframe import parse_speaker_crop_map, read_dotenv_value, resolve_hf_token
 from clipsai.reframe import resolve_output_filename, resolve_render_settings
 from clipsai.resize.crops import Crops
 from clipsai.resize.segment import Segment
@@ -78,6 +78,15 @@ def test_resolve_hf_token_prefers_explicit_token_over_dotenv(
     monkeypatch.delenv("HF_TOKEN", raising=False)
 
     assert resolve_hf_token("explicit-token") == "explicit-token"
+
+
+def test_parse_speaker_crop_map_returns_integer_mapping():
+    assert parse_speaker_crop_map("1:1056, 0:337") == {1: 1056, 0: 337}
+
+
+def test_parse_speaker_crop_map_rejects_invalid_shape():
+    with pytest.raises(ValueError, match="speaker:x"):
+        parse_speaker_crop_map("1=1056")
 
 
 def test_build_plan_contains_expected_shape(tmp_path: Path):

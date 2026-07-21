@@ -272,6 +272,46 @@ def test_calc_n_batches_treats_mediapipe_as_cpu_side_detection():
     assert n_batches == 1
 
 
+def test_resizer_uses_speaker_crop_map_for_segment_coordinates():
+    mock_video_file = MagicMock(spec=VideoFile)
+    mock_video_file.get_width_pixels.return_value = 1920
+    mock_video_file.get_height_pixels.return_value = 1080
+
+    resizer = build_test_resizer()
+    crops = resizer.resize(
+        video_file=mock_video_file,
+        speaker_segments=[
+            {"speakers": [1], "start_time": 0.0, "end_time": 5.0},
+            {"speakers": [0], "start_time": 5.0, "end_time": 10.0},
+            {"speakers": [1], "start_time": 10.0, "end_time": 15.0},
+        ],
+        scene_changes=[],
+        speaker_crop_map={1: 1056, 0: 337},
+    )
+
+    assert [(segment.speakers, segment.x, segment.y) for segment in crops.segments] == [
+        ([1], 1056, 0),
+        ([0], 337, 0),
+        ([1], 1056, 0),
+    ]
+
+
+def test_resizer_speaker_crop_map_requires_each_single_speaker():
+    mock_video_file = MagicMock(spec=VideoFile)
+    mock_video_file.get_width_pixels.return_value = 1920
+    mock_video_file.get_height_pixels.return_value = 1080
+
+    resizer = build_test_resizer()
+
+    with pytest.raises(Exception, match="missing speaker 1"):
+        resizer.resize(
+            video_file=mock_video_file,
+            speaker_segments=[{"speakers": [1], "start_time": 0.0, "end_time": 5.0}],
+            scene_changes=[],
+            speaker_crop_map={0: 337},
+        )
+
+
 @pytest.mark.parametrize(
     "roi, resize_width, resize_height, expected_crop",
     [

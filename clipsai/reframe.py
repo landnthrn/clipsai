@@ -167,6 +167,44 @@ def read_dotenv_value(key: str, dotenv_paths: list[Path] | None = None) -> str |
     return None
 
 
+def parse_speaker_crop_map(raw_value: str | None) -> dict[int, int] | None:
+    """
+    Parse a speaker-to-crop-x map such as ``0:337,1:1056``.
+    """
+    if raw_value is None:
+        return None
+
+    raw_value = raw_value.strip()
+    if not raw_value:
+        return None
+
+    speaker_crop_map: dict[int, int] = {}
+    for raw_pair in raw_value.split(","):
+        if ":" not in raw_pair:
+            raise ValueError(
+                "Speaker crop map entries must use speaker:x format, "
+                "for example 0:337,1:1056."
+            )
+
+        speaker_text, crop_x_text = raw_pair.split(":", 1)
+        try:
+            speaker = int(speaker_text.strip())
+            crop_x = int(crop_x_text.strip())
+        except ValueError as exc:
+            raise ValueError(
+                "Speaker crop map speakers and crop positions must be integers."
+            ) from exc
+
+        if speaker < 0 or crop_x < 0:
+            raise ValueError(
+                "Speaker crop map speakers and crop positions must be zero or greater."
+            )
+
+        speaker_crop_map[speaker] = crop_x
+
+    return speaker_crop_map
+
+
 def resolve_hf_token(explicit_token: str | None) -> str:
     """
     Resolve the Hugging Face token from argument, environment, or local dotenv.
@@ -316,6 +354,7 @@ def build_plan_editing_help() -> dict:
             "mediapipe_face_detect_min_detection_confidence": "Analyze-time MediaPipe face-detection minimum confidence. Usually not meant to be edited after analysis.",
             "scene_merge_threshold": "Analyze-time merge setting. Usually not meant to be edited after analysis.",
             "raw_diarization_path": "Optional saved raw diarization JSON path from analysis. Usually not meant to be edited.",
+            "speaker_crop_map": "Optional analyze-time manual speaker-to-horizontal-crop map. Usually not meant to be edited after analysis.",
         },
         "render": {
             "mode": (
@@ -437,6 +476,7 @@ def normalize_plan_data(plan_data: dict) -> dict:
     analysis_data.setdefault("min_speakers", None)
     analysis_data.setdefault("max_speakers", None)
     analysis_data.setdefault("raw_diarization_path", None)
+    analysis_data.setdefault("speaker_crop_map", None)
     analysis_data.setdefault(
         "face_detect_backend",
         get_default_face_detect_backend(analysis_data["diarization_model"]),
@@ -1012,6 +1052,7 @@ def analyze_video(
     min_speakers: int | None,
     max_speakers: int | None,
     save_raw_diarization: bool,
+    speaker_crop_map: dict[int, int] | None,
 ) -> Path:
     """
     Analyze one video and write its editable plan JSON.
@@ -1041,6 +1082,7 @@ def analyze_video(
         raw_diarization_output_path=(
             None if raw_diarization_path is None else str(raw_diarization_path)
         ),
+        speaker_crop_map=speaker_crop_map,
         min_segment_duration=min_segment_duration,
         samples_per_segment=samples_per_segment,
         face_detect_width=face_detect_width,
@@ -1056,6 +1098,7 @@ def analyze_video(
         "num_speakers": num_speakers,
         "min_speakers": min_speakers,
         "max_speakers": max_speakers,
+        "speaker_crop_map": speaker_crop_map,
         "min_segment_duration": min_segment_duration,
         "samples_per_segment": samples_per_segment,
         "face_detect_width": face_detect_width,
@@ -1317,6 +1360,7 @@ def analyze_command(args: argparse.Namespace) -> int:
     CLI handler for analysis-only mode.
     """
     hf_token = resolve_hf_token(args.hf_token)
+    speaker_crop_map = parse_speaker_crop_map(args.speaker_crop_map)
     video_files = discover_video_files(args.input)
     plans_dir = Path(args.plans_dir).expanduser().resolve()
     for video_path in video_files:
@@ -1344,6 +1388,7 @@ def analyze_command(args: argparse.Namespace) -> int:
             num_speakers=args.num_speakers,
             min_speakers=args.min_speakers,
             max_speakers=args.max_speakers,
+            speaker_crop_map=speaker_crop_map,
             save_raw_diarization=args.save_raw_diarization,
         )
         print(f"Created plan: {plan_path}")
@@ -1479,6 +1524,14 @@ def build_parser() -> argparse.ArgumentParser:
             type=int,
             default=None,
             help="Upper speaker-count bound during diarization.",
+        )
+        subparser.add_argument(
+            "--speaker-crop-map",
+            default=None,
+            help=(
+                "Optional manual speaker-to-crop-x map for static multi-speaker "
+                "shots, for example 0:337,1:1056."
+            ),
         )
         subparser.add_argument(
             "--samples-per-segment",

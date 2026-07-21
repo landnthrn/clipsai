@@ -115,6 +115,7 @@ class Resizer:
         face_detect_width: int = 960,
         n_face_detect_batches: int = 8,
         scene_merge_threshold: float = 0.25,
+        speaker_crop_map: dict[int, int] | None = None,
     ) -> Crops:
         """
         Calculates the coordinates to resize the video to for different
@@ -146,6 +147,8 @@ class Resizer:
             The threshold in seconds for merging scene changes with speaker segments.
             Scene changes within this threshold of a segment's start or end time will
             cause the segment to be adjusted.
+        speaker_crop_map: dict[int, int]
+            Optional mapping of speaker ID to manual horizontal crop position.
 
         Returns
         -------
@@ -174,23 +177,33 @@ class Resizer:
         )
         logging.debug("Video has {} distinct segments.".format(len(segments)))
 
-        logging.debug("Determining the first second with a face for each segment.")
-        segments = self._find_first_sec_with_face_for_each_segment(
-            segments, video_file, face_detect_width, n_face_detect_batches
-        )
+        if speaker_crop_map:
+            logging.debug("Using manual speaker crop map for segment coordinates.")
+            segments = self._add_speaker_crop_map_coords_to_each_segment(
+                segments=segments,
+                video_file=video_file,
+                resize_width=resize_width,
+                resize_height=resize_height,
+                speaker_crop_map=speaker_crop_map,
+            )
+        else:
+            logging.debug("Determining the first second with a face for each segment.")
+            segments = self._find_first_sec_with_face_for_each_segment(
+                segments, video_file, face_detect_width, n_face_detect_batches
+            )
 
-        logging.debug(
-            "Determining the region of interest for {} segments.".format(len(segments))
-        )
-        segments = self._add_x_y_coords_to_each_segment(
-            segments,
-            video_file,
-            resize_width,
-            resize_height,
-            samples_per_segment,
-            face_detect_width,
-            n_face_detect_batches,
-        )
+            logging.debug(
+                "Determining the region of interest for {} segments.".format(len(segments))
+            )
+            segments = self._add_x_y_coords_to_each_segment(
+                segments,
+                video_file,
+                resize_width,
+                resize_height,
+                samples_per_segment,
+                face_detect_width,
+                n_face_detect_batches,
+            )
 
         logging.debug("Merging identical segments together.")
         unmerge_segments_length = len(segments)
@@ -222,6 +235,38 @@ class Resizer:
         )
 
         return crops
+
+    def _add_speaker_crop_map_coords_to_each_segment(
+        self,
+        segments: list[dict],
+        video_file: VideoFile,
+        resize_width: int,
+        resize_height: int,
+        speaker_crop_map: dict[int, int],
+    ) -> list[dict]:
+        """
+        Add crop coordinates from an explicit speaker-to-x-position map.
+        """
+        max_x = max(video_file.get_width_pixels() - resize_width, 0)
+        max_y = max(video_file.get_height_pixels() - resize_height, 0)
+
+        for segment in segments:
+            speakers = segment.get("speakers", [])
+            if len(speakers) != 1:
+                segment["x"] = max_x // 2
+                segment["y"] = max_y // 2
+                continue
+
+            speaker = int(speakers[0])
+            if speaker not in speaker_crop_map:
+                raise ResizerError(
+                    f"Speaker crop map is missing speaker {speaker}."
+                )
+
+            segment["x"] = min(max(int(speaker_crop_map[speaker]), 0), max_x)
+            segment["y"] = max_y // 2
+
+        return segments
 
     def _calc_resize_width_and_height_pixels(
         self,
