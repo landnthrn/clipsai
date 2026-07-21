@@ -203,6 +203,8 @@ test_files/
 input/
 output/
 plans/
+output-*-baseline/
+plans-*-baseline/
 models/mediapipe/
 
 # Ignore macOS system files
