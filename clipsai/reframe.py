@@ -167,47 +167,6 @@ def read_dotenv_value(key: str, dotenv_paths: list[Path] | None = None) -> str |
     return None
 
 
-def parse_speaker_crop_map(raw_value: str | list[str] | None) -> dict[int, int] | None:
-    """
-    Parse a speaker-to-crop-x map such as ``0:337,1:1056``.
-    """
-    if raw_value is None:
-        return None
-
-    if isinstance(raw_value, list):
-        raw_value = ",".join(raw_value)
-
-    raw_value = raw_value.strip()
-    if not raw_value:
-        return None
-
-    speaker_crop_map: dict[int, int] = {}
-    for raw_pair in raw_value.split(","):
-        if ":" not in raw_pair:
-            raise ValueError(
-                "Speaker crop map entries must use speaker:x format, "
-                "for example 0:337,1:1056."
-            )
-
-        speaker_text, crop_x_text = raw_pair.split(":", 1)
-        try:
-            speaker = int(speaker_text.strip())
-            crop_x = int(crop_x_text.strip())
-        except ValueError as exc:
-            raise ValueError(
-                "Speaker crop map speakers and crop positions must be integers."
-            ) from exc
-
-        if speaker < 0 or crop_x < 0:
-            raise ValueError(
-                "Speaker crop map speakers and crop positions must be zero or greater."
-            )
-
-        speaker_crop_map[speaker] = crop_x
-
-    return speaker_crop_map
-
-
 def resolve_hf_token(explicit_token: str | None) -> str:
     """
     Resolve the Hugging Face token from argument, environment, or local dotenv.
@@ -318,7 +277,7 @@ def build_render_plan_entry(
         "output_suffix": output_suffix,
         "output_width": output_width,
         "output_height": output_height,
-        "overwrite": True,
+        "overwrite": False,
         "output_summary_and_logs": True,
         **RENDER_PRESETS[render_preset],
     }
@@ -357,7 +316,6 @@ def build_plan_editing_help() -> dict:
             "mediapipe_face_detect_min_detection_confidence": "Analyze-time MediaPipe face-detection minimum confidence. Usually not meant to be edited after analysis.",
             "scene_merge_threshold": "Analyze-time merge setting. Usually not meant to be edited after analysis.",
             "raw_diarization_path": "Optional saved raw diarization JSON path from analysis. Usually not meant to be edited.",
-            "speaker_crop_map": "Optional analyze-time manual speaker-to-horizontal-crop map. Usually not meant to be edited after analysis.",
         },
         "render": {
             "mode": (
@@ -373,7 +331,7 @@ def build_plan_editing_help() -> dict:
                 "Used only when output_name_mode is suffix. "
                 "Examples: _vertical or _social-cut."
             ),
-            "overwrite": "true = replace same-name output. false = fail instead.",
+            "overwrite": "true = replace same-name output. false = create a numbered copy when the output already exists.",
             "output_summary_and_logs": (
                 "true = export a per-video folder with summary.md, "
                 "full-record.json, and timeline.csv. false = skip it."
@@ -479,7 +437,6 @@ def normalize_plan_data(plan_data: dict) -> dict:
     analysis_data.setdefault("min_speakers", None)
     analysis_data.setdefault("max_speakers", None)
     analysis_data.setdefault("raw_diarization_path", None)
-    analysis_data.setdefault("speaker_crop_map", None)
     analysis_data.setdefault(
         "face_detect_backend",
         get_default_face_detect_backend(analysis_data["diarization_model"]),
@@ -500,7 +457,7 @@ def normalize_plan_data(plan_data: dict) -> dict:
     render_data.setdefault("output_suffix", inferred_output_suffix)
     render_data.setdefault("output_width", DEFAULT_OUTPUT_WIDTH)
     render_data.setdefault("output_height", DEFAULT_OUTPUT_HEIGHT)
-    render_data.setdefault("overwrite", True)
+    render_data.setdefault("overwrite", False)
     legacy_summary_flag = bool(render_data.get("export_summary_markdown", False))
     legacy_debug_flag = bool(render_data.get("export_result_debug", False))
     render_data.setdefault(
@@ -714,7 +671,7 @@ def resolve_render_settings(
     )
     resolved_settings["output_name"] = resolve_output_filename(source_path, render_data)
     resolved_settings["overwrite"] = (
-        bool(render_data.get("overwrite", True))
+        bool(render_data.get("overwrite", False))
         if overwrite_override is None
         else overwrite_override
     )
@@ -726,9 +683,39 @@ def resolve_render_settings(
 
 def format_summary_and_logs_timestamp(now: datetime) -> str:
     """
-    Format a Windows-safe timestamp for result debug folder names.
+    Format a Windows-safe timestamp for summary/log folder names.
     """
-    return now.strftime("%I-%M%p_%m-%d").lstrip("0")
+    return now.strftime("%I;%M%p_%m-%d").lstrip("0")
+
+
+def make_numbered_copy_path(path: Path) -> Path:
+    """
+    Return a Windows-style numbered path when the requested path already exists.
+    """
+    if not path.exists():
+        return path
+
+    for copy_number in range(1, 10000):
+        candidate = path.with_name(f"{path.stem} ({copy_number}){path.suffix}")
+        if not candidate.exists():
+            return candidate
+
+    raise FileExistsError(f"Could not find an available numbered filename for: {path}")
+
+
+def make_numbered_copy_directory(path: Path) -> Path:
+    """
+    Return a numbered directory path when the requested directory already exists.
+    """
+    if not path.exists():
+        return path
+
+    for copy_number in range(1, 10000):
+        candidate = path.with_name(f"{path.name} ({copy_number})")
+        if not candidate.exists():
+            return candidate
+
+    raise FileExistsError(f"Could not find an available numbered folder for: {path}")
 
 
 def sanitize_summary_and_logs_folder_name(name: str) -> str:
@@ -774,13 +761,19 @@ def build_summary_and_logs_paths(
     source_path: Path,
     output_dir: Path,
     batch_root: Path | None,
+    now: datetime,
+    overwrite: bool,
 ) -> dict[str, Path]:
     """
     Resolve the per-video summary/logs file paths.
     """
-    video_root = (
-        batch_root or (output_dir / DEFAULT_SUMMARY_AND_LOGS_DIRNAME)
-    ) / sanitize_summary_and_logs_folder_name(source_path.stem)
+    timestamp = format_summary_and_logs_timestamp(now)
+    video_folder_name = sanitize_summary_and_logs_folder_name(
+        f"{source_path.stem}_{timestamp}"
+    )
+    video_root = (batch_root or (output_dir / DEFAULT_SUMMARY_AND_LOGS_DIRNAME)) / video_folder_name
+    if overwrite is False:
+        video_root = make_numbered_copy_directory(video_root)
     return {
         "video_root": video_root,
         "summary_path": video_root / "summary.md",
@@ -1055,7 +1048,6 @@ def analyze_video(
     min_speakers: int | None,
     max_speakers: int | None,
     save_raw_diarization: bool,
-    speaker_crop_map: dict[int, int] | None,
 ) -> Path:
     """
     Analyze one video and write its editable plan JSON.
@@ -1085,7 +1077,6 @@ def analyze_video(
         raw_diarization_output_path=(
             None if raw_diarization_path is None else str(raw_diarization_path)
         ),
-        speaker_crop_map=speaker_crop_map,
         min_segment_duration=min_segment_duration,
         samples_per_segment=samples_per_segment,
         face_detect_width=face_detect_width,
@@ -1101,7 +1092,6 @@ def analyze_video(
         "num_speakers": num_speakers,
         "min_speakers": min_speakers,
         "max_speakers": max_speakers,
-        "speaker_crop_map": speaker_crop_map,
         "min_segment_duration": min_segment_duration,
         "samples_per_segment": samples_per_segment,
         "face_detect_width": face_detect_width,
@@ -1213,25 +1203,19 @@ def render_plan(
     )
     render_started_at = render_started_at or datetime.now()
     generated_at = render_started_at.strftime("%m/%d/%Y %I:%M %p")
+    output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / render_settings["output_name"]
+    if render_settings["overwrite"] is False:
+        output_path = make_numbered_copy_path(output_path)
+        render_settings["output_name"] = output_path.name
     analysis_data = plan_data["analysis"]
     export_paths = build_summary_and_logs_paths(
         source_path=source_path,
         output_dir=output_dir,
         batch_root=summary_and_logs_batch_root,
+        now=render_started_at,
+        overwrite=render_settings["overwrite"],
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if output_path.exists() and render_settings["overwrite"] is False:
-        raise FileExistsError(
-            f"Output file already exists and overwrite is disabled: {output_path}"
-        )
-    if render_settings["output_summary_and_logs"] and render_settings["overwrite"] is False:
-        for path_key in ("summary_path", "full_record_path", "timeline_path"):
-            debug_path = export_paths[path_key]
-            if debug_path.exists():
-                raise FileExistsError(
-                    f"Summary/log file already exists and overwrite is disabled: {debug_path}"
-                )
 
     temp_dir = output_dir / f"{source_path.stem}_temp_segments"
     if temp_dir.exists():
@@ -1363,7 +1347,6 @@ def analyze_command(args: argparse.Namespace) -> int:
     CLI handler for analysis-only mode.
     """
     hf_token = resolve_hf_token(args.hf_token)
-    speaker_crop_map = parse_speaker_crop_map(args.speaker_crop_map)
     video_files = discover_video_files(args.input)
     plans_dir = Path(args.plans_dir).expanduser().resolve()
     for video_path in video_files:
@@ -1391,7 +1374,6 @@ def analyze_command(args: argparse.Namespace) -> int:
             num_speakers=args.num_speakers,
             min_speakers=args.min_speakers,
             max_speakers=args.max_speakers,
-            speaker_crop_map=speaker_crop_map,
             save_raw_diarization=args.save_raw_diarization,
         )
         print(f"Created plan: {plan_path}")
@@ -1529,15 +1511,6 @@ def build_parser() -> argparse.ArgumentParser:
             help="Upper speaker-count bound during diarization.",
         )
         subparser.add_argument(
-            "--speaker-crop-map",
-            nargs="+",
-            default=None,
-            help=(
-                "Optional manual speaker-to-crop-x map for static multi-speaker "
-                "shots, for example 0:337,1:1056."
-            ),
-        )
-        subparser.add_argument(
             "--samples-per-segment",
             type=int,
             default=DEFAULT_SAMPLES_PER_SEGMENT,
@@ -1625,8 +1598,8 @@ def build_parser() -> argparse.ArgumentParser:
     render_parser.add_argument(
         "--overwrite",
         action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Optional override for whether existing outputs may be replaced.",
+        default=False,
+        help="Replace existing outputs instead of creating a numbered copy.",
     )
     render_parser.set_defaults(handler=render_command)
 

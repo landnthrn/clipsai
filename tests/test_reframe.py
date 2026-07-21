@@ -12,8 +12,9 @@ from clipsai.reframe import default_raw_diarization_path
 from clipsai.reframe import discover_plan_files, discover_video_files
 from clipsai.reframe import format_summary_and_logs_timestamp, get_enabled_segments
 from clipsai.reframe import load_plan
+from clipsai.reframe import make_numbered_copy_directory, make_numbered_copy_path
 from clipsai.reframe import normalize_plan_data, original_output_filename
-from clipsai.reframe import parse_speaker_crop_map, read_dotenv_value, resolve_hf_token
+from clipsai.reframe import read_dotenv_value, resolve_hf_token
 from clipsai.reframe import resolve_output_filename, resolve_render_settings
 from clipsai.resize.crops import Crops
 from clipsai.resize.segment import Segment
@@ -78,19 +79,6 @@ def test_resolve_hf_token_prefers_explicit_token_over_dotenv(
     monkeypatch.delenv("HF_TOKEN", raising=False)
 
     assert resolve_hf_token("explicit-token") == "explicit-token"
-
-
-def test_parse_speaker_crop_map_returns_integer_mapping():
-    assert parse_speaker_crop_map("1:1056, 0:337") == {1: 1056, 0: 337}
-
-
-def test_parse_speaker_crop_map_accepts_shell_split_values():
-    assert parse_speaker_crop_map(["1:1056", "0:337"]) == {1: 1056, 0: 337}
-
-
-def test_parse_speaker_crop_map_rejects_invalid_shape():
-    with pytest.raises(ValueError, match="speaker:x"):
-        parse_speaker_crop_map("1=1056")
 
 
 def test_build_plan_contains_expected_shape(tmp_path: Path):
@@ -207,7 +195,7 @@ def test_normalize_plan_data_upgrades_old_plan_shape(tmp_path: Path):
     assert normalized["render"]["mode"] == "preset"
     assert normalized["render"]["output_name_mode"] == "suffix"
     assert normalized["render"]["output_suffix"] == "_vertical"
-    assert normalized["render"]["overwrite"] is True
+    assert normalized["render"]["overwrite"] is False
     assert normalized["render"]["output_summary_and_logs"] is True
     assert "export_summary_markdown" not in normalized["render"]
     assert "export_result_debug" not in normalized["render"]
@@ -521,7 +509,24 @@ def test_build_render_summary_markdown_contains_core_details(tmp_path: Path):
 def test_format_summary_and_logs_timestamp_uses_windows_safe_layout():
     formatted = format_summary_and_logs_timestamp(datetime(2026, 7, 16, 18, 32))
 
-    assert formatted == "6-32PM_07-16"
+    assert formatted == "6;32PM_07-16"
+
+
+def test_make_numbered_copy_path_uses_windows_style_names(tmp_path: Path):
+    output_path = tmp_path / "episode01_vertical.mp4"
+    output_path.write_text("first", encoding="utf-8")
+
+    assert make_numbered_copy_path(output_path) == tmp_path / "episode01_vertical (1).mp4"
+
+
+def test_make_numbered_copy_directory_uses_windows_style_names(tmp_path: Path):
+    summary_dir = tmp_path / "episode01_6;32PM_07-16"
+    summary_dir.mkdir()
+
+    assert (
+        make_numbered_copy_directory(summary_dir)
+        == tmp_path / "episode01_6;32PM_07-16 (1)"
+    )
 
 
 def test_build_summary_and_logs_batch_root_uses_batch_label_and_timestamp(tmp_path: Path):
@@ -533,7 +538,7 @@ def test_build_summary_and_logs_batch_root_uses_batch_label_and_timestamp(tmp_pa
 
     assert (
         batch_root
-        == tmp_path / "output" / "summary-and-logs" / "Podcast EP2_6-32PM_07-16"
+        == tmp_path / "output" / "summary-and-logs" / "Podcast EP2_6;32PM_07-16"
     )
 
 

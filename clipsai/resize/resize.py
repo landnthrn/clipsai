@@ -41,7 +41,6 @@ def resize(
     min_speakers: int | None = None,
     max_speakers: int | None = None,
     raw_diarization_output_path: str | None = None,
-    speaker_crop_map: dict[int, int] | None = None,
     device: str = None,
 ) -> Crops:
     """
@@ -93,8 +92,6 @@ def resize(
         Upper bound on the speaker count during diarization.
     raw_diarization_output_path: str
         Optional path where raw pyannote diarization output JSON should be written.
-    speaker_crop_map: dict[int, int]
-        Optional mapping of speaker ID to manual horizontal crop position.
     device: str
         PyTorch device to perform computations on. Ex: 'cpu', 'cuda'. Default is None
         (auto detects the correct device)
@@ -156,7 +153,6 @@ def resize(
         face_detect_width=face_detect_width,
         n_face_detect_batches=n_face_detect_batches,
         scene_merge_threshold=scene_merge_threshold,
-        speaker_crop_map=speaker_crop_map,
     )
     resizer.cleanup()
 
