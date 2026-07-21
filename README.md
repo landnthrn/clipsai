@@ -51,14 +51,14 @@ unconditionally anymore.
 If you need the transcription stack, install its extra dependencies separately for the
 environment you want to use.
 
-For Hugging Face access, copy `.env.example` to `.env` and add your token locally:
+For Hugging Face access, add your token to the local `.env` file:
 
 ```text
 HF_TOKEN=your_hugging_face_token_here
 ```
 
-The real `.env` file is ignored by Git and should not be committed. `--hf-token` and an
-already-set `HF_TOKEN` environment variable still work and take priority over `.env`.
+Never commit a real token. `--hf-token` and an already-set `HF_TOKEN` environment
+variable still work and take priority over `.env`.
 
 On Windows, this repo now resolves the `magic` module through `python-magic-bin`
 instead of plain `python-magic`, because the non-binary package expects an external
