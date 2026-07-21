@@ -167,12 +167,15 @@ def read_dotenv_value(key: str, dotenv_paths: list[Path] | None = None) -> str |
     return None
 
 
-def parse_speaker_crop_map(raw_value: str | None) -> dict[int, int] | None:
+def parse_speaker_crop_map(raw_value: str | list[str] | None) -> dict[int, int] | None:
     """
     Parse a speaker-to-crop-x map such as ``0:337,1:1056``.
     """
     if raw_value is None:
         return None
+
+    if isinstance(raw_value, list):
+        raw_value = ",".join(raw_value)
 
     raw_value = raw_value.strip()
     if not raw_value:
@@ -1527,6 +1530,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         subparser.add_argument(
             "--speaker-crop-map",
+            nargs="+",
             default=None,
             help=(
                 "Optional manual speaker-to-crop-x map for static multi-speaker "

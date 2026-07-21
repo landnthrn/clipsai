@@ -84,6 +84,10 @@ def test_parse_speaker_crop_map_returns_integer_mapping():
     assert parse_speaker_crop_map("1:1056, 0:337") == {1: 1056, 0: 337}
 
 
+def test_parse_speaker_crop_map_accepts_shell_split_values():
+    assert parse_speaker_crop_map(["1:1056", "0:337"]) == {1: 1056, 0: 337}
+
+
 def test_parse_speaker_crop_map_rejects_invalid_shape():
     with pytest.raises(ValueError, match="speaker:x"):
         parse_speaker_crop_map("1=1056")
