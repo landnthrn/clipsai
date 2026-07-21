@@ -134,6 +134,56 @@ def test_build_plan_contains_expected_shape(tmp_path: Path):
     assert plan["segments"][1]["x"] == 900
 
 
+def test_build_plan_preserves_crop_selection_evidence(tmp_path: Path):
+    video_path = tmp_path / "podcast.mp4"
+    crops = Crops(
+        original_width=1920,
+        original_height=1080,
+        crop_width=608,
+        crop_height=1080,
+        segments=[
+            Segment(
+                speakers=[0],
+                start_time=0.0,
+                end_time=2.5,
+                x=100,
+                y=0,
+                crop_selection={
+                    "reason": "mouth_movement",
+                    "face_side": "left",
+                    "face_center_x": 350,
+                    "mouth_movement": 0.042,
+                    "landmark_count": 5,
+                    "face_sample_count": 8,
+                },
+            ),
+        ],
+    )
+
+    plan = build_plan(
+        video_path=video_path,
+        crops=crops,
+        aspect_ratio=(9, 16),
+        output_width=1080,
+        output_height=1920,
+        render_preset="high",
+        analysis_settings={
+            "diarization_model": "community-1",
+            "num_speakers": 2,
+            "min_speakers": None,
+            "max_speakers": None,
+            "min_segment_duration": 0.75,
+            "face_detect_backend": "mediapipe",
+            "mediapipe_face_detect_model_selection": 1,
+            "mediapipe_face_detect_min_detection_confidence": 0.3,
+            "raw_diarization_path": None,
+        },
+    )
+
+    assert plan["segments"][0]["crop_selection"]["reason"] == "mouth_movement"
+    assert plan["segments"][0]["crop_selection"]["face_side"] == "left"
+
+
 def test_default_paths(tmp_path: Path):
     source_path = tmp_path / "episode01.mp4"
     plan_path = default_plan_path(source_path, tmp_path / "plans")
@@ -504,7 +554,7 @@ def test_build_render_summary_markdown_contains_core_details(tmp_path: Path):
     assert "Output size: `1080x1920`" in summary_markdown
     assert "Enabled segments rendered: `2`" in summary_markdown
     assert "Detected speaker count: `0`" in summary_markdown
-    assert "| segment_0001 | enabled | 0.000000 | 5.500000 | 5.500000 | - |  |  | - |" in summary_markdown
+    assert "| segment_0001 | enabled | 0.000000 | 5.500000 | 5.500000 | - |  |  | - | - |  |  | - |" in summary_markdown
 
 
 def test_format_summary_and_logs_timestamp_uses_windows_safe_layout():
@@ -553,6 +603,14 @@ def test_build_timeline_csv_rows_marks_enabled_and_disabled_segments():
                 "speakers": [0, 1],
                 "x": 120,
                 "y": 10,
+                "crop_selection": {
+                    "reason": "mouth_movement",
+                    "face_side": "left",
+                    "face_center_x": 350,
+                    "mouth_movement": 0.042,
+                    "landmark_count": 5,
+                    "face_sample_count": 8,
+                },
                 "notes": "keep",
             }
         ],
@@ -572,6 +630,9 @@ def test_build_timeline_csv_rows_marks_enabled_and_disabled_segments():
     assert rows[0]["status"] == "enabled"
     assert rows[0]["duration_seconds"] == 3.5
     assert rows[0]["speakers"] == "0,1"
+    assert rows[0]["crop_selection_reason"] == "mouth_movement"
+    assert rows[0]["face_side"] == "left"
+    assert rows[0]["landmark_count"] == 5
     assert rows[1]["status"] == "disabled"
     assert rows[1]["notes"] == "skip"
 

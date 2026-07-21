@@ -244,7 +244,7 @@ def build_segment_plan_entry(segment, index: int) -> dict:
     Convert a resize segment into a hand-editable plan entry.
     """
     segment_data = segment.to_dict()
-    return {
+    plan_entry = {
         "segment_id": f"segment_{index + 1:04d}",
         "enabled": True,
         "speakers": segment_data["speakers"],
@@ -254,6 +254,9 @@ def build_segment_plan_entry(segment, index: int) -> dict:
         "y": segment_data["y"],
         "notes": "",
     }
+    if "crop_selection" in segment_data:
+        plan_entry["crop_selection"] = segment_data["crop_selection"]
+    return plan_entry
 
 
 def build_render_plan_entry(
@@ -352,6 +355,7 @@ def build_plan_editing_help() -> dict:
             "end_time": "Segment end time in seconds.",
             "x": "Horizontal crop position in source pixels.",
             "y": "Vertical crop position in source pixels.",
+            "crop_selection": "Analyze-time evidence for why this crop was selected. Usually not meant to be edited.",
             "notes": "Optional personal note. Ignored by the renderer.",
         },
     }
@@ -535,6 +539,7 @@ def create_crops_from_plan(plan_data: dict) -> Crops:
             end_time=segment["end_time"],
             x=segment["x"],
             y=segment["y"],
+            crop_selection=segment.get("crop_selection"),
         )
         for segment in get_enabled_segments(plan_data)
     ]
@@ -870,8 +875,8 @@ def build_render_summary_markdown(
             "",
             "## Timeline",
             "",
-            "| Segment | Status | Start | End | Duration | Speakers | X | Y | Notes |",
-            "| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | --- |",
+            "| Segment | Status | Start | End | Duration | Speakers | X | Y | Crop Reason | Face Side | Mouth Movement | Landmark Frames | Notes |",
+            "| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | --- | --- | ---: | ---: | --- |",
         ]
     )
     for row in timeline_rows:
@@ -885,6 +890,10 @@ def build_render_summary_markdown(
             f"{row['speakers'] or '-'} | "
             f"{row['x']} | "
             f"{row['y']} | "
+            f"{row['crop_selection_reason'] or '-'} | "
+            f"{row['face_side'] or '-'} | "
+            f"{row['mouth_movement']} | "
+            f"{row['landmark_count']} | "
             f"{row['notes'] or '-'} |"
         )
 
@@ -903,6 +912,7 @@ def build_timeline_csv_rows(
         for segment in segments:
             start_time = float(segment["start_time"])
             end_time = float(segment["end_time"])
+            crop_selection = segment.get("crop_selection") or {}
             rows.append(
                 {
                     "segment_id": segment.get("segment_id", ""),
@@ -913,6 +923,12 @@ def build_timeline_csv_rows(
                     "speakers": ",".join(str(speaker) for speaker in segment.get("speakers", [])),
                     "x": segment.get("x", ""),
                     "y": segment.get("y", ""),
+                    "crop_selection_reason": crop_selection.get("reason", ""),
+                    "face_side": crop_selection.get("face_side", ""),
+                    "face_center_x": crop_selection.get("face_center_x", ""),
+                    "mouth_movement": crop_selection.get("mouth_movement", ""),
+                    "landmark_count": crop_selection.get("landmark_count", ""),
+                    "face_sample_count": crop_selection.get("face_sample_count", ""),
                     "notes": segment.get("notes", ""),
                 }
             )
@@ -1017,6 +1033,12 @@ def write_summary_and_logs_exports(
                 "speakers",
                 "x",
                 "y",
+                "crop_selection_reason",
+                "face_side",
+                "face_center_x",
+                "mouth_movement",
+                "landmark_count",
+                "face_sample_count",
                 "notes",
             ],
         )

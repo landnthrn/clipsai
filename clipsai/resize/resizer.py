@@ -34,6 +34,14 @@ from sklearn.cluster import KMeans
 import torch
 
 
+MOUTH_ANALYSIS_CROP_MARGIN_RATIO = 0.75
+MOUTH_ANALYSIS_MIN_FACE_SIZE_PIXELS = 256
+MOUTH_MOVEMENT_MIN_SCORE = 0.01
+MOUTH_MOVEMENT_MIN_LANDMARK_FRAMES = 2
+MOUTH_MOVEMENT_MIN_RATIO = 1.25
+MOUTH_MOVEMENT_MIN_DELTA = 0.015
+
+
 class Resizer:
     """
     A class for calculating the initial coordinates for resizing by using
@@ -214,6 +222,7 @@ class Resizer:
                     end_time=segment["end_time"],
                     x=segment["x"],
                     y=segment["y"],
+                    crop_selection=segment.get("crop_selection"),
                 )
             )
 
@@ -651,6 +660,14 @@ class Resizer:
                 face_detect_width=face_detect_width,
                 speaker_face_centers=speaker_face_centers,
             )
+        segments_with_xy_coords = self._reconcile_speaker_face_choices(
+            segments=segments_with_xy_coords,
+            resize_width=resize_width,
+            resize_height=resize_height,
+            frame_width=video_file.get_width_pixels(),
+        )
+        for segment in segments_with_xy_coords:
+            segment.pop("_roi_candidates", None)
         return segments_with_xy_coords
 
     def _add_x_y_coords_to_each_segment_batch(
@@ -739,12 +756,15 @@ class Resizer:
         for segment in segments:
             # find segment roi
             if segment["found_face"] is True:
-                roi = self._calc_segment_roi(
+                roi_result = self._calc_segment_roi(
                     frames=frames[idx : idx + segment["num_samples"]],
                     face_detections=face_detections[idx : idx + segment["num_samples"]],
                     speakers=segment.get("speakers", []),
                     speaker_face_centers=speaker_face_centers,
                 )
+                roi = roi_result["roi"]
+                segment["crop_selection"] = roi_result["crop_selection"]
+                segment["_roi_candidates"] = roi_result.get("roi_candidates", [])
                 idx += segment["num_samples"]
                 del segment["num_samples"]
             else:
@@ -755,6 +775,16 @@ class Resizer:
                     width=(video_file.get_width_pixels()) // 2,
                     height=(video_file.get_height_pixels()) // 2,
                 )
+                segment["crop_selection"] = {
+                    "reason": "fallback_default_center",
+                    "face_side": "center",
+                    "face_center_x": self._roi_center_x(roi),
+                    "mouth_movement": 0.0,
+                    "landmark_count": 0,
+                    "face_sample_count": 0,
+                    "speaker_mapping_locked": False,
+                }
+                segment["_roi_candidates"] = []
             del segment["found_face"]
             del segment["first_face_sec"]
 
@@ -772,7 +802,7 @@ class Resizer:
         face_detections: list[np.ndarray],
         speakers: list[int] | None = None,
         speaker_face_centers: dict[int, float] | None = None,
-    ) -> Rect:
+    ) -> dict:
         """
         Find the region of interest (ROI) for a given segment.
 
@@ -785,8 +815,8 @@ class Resizer:
 
         Returns
         -------
-        Rect
-            The region of interest (ROI) for the segment.
+        dict
+            The selected ROI plus crop-selection evidence for the segment.
         """
         speakers = speakers or []
         speaker_face_centers = (
@@ -807,6 +837,7 @@ class Resizer:
         if k == 0:
             raise ResizerError("No faces detected in segment.")
         bounding_boxes = np.stack(bounding_boxes)
+        frame_width = frames[0].shape[1]
 
         # single face detected
         if k == 1:
@@ -818,7 +849,22 @@ class Resizer:
                 speaker_face_centers=speaker_face_centers,
                 roi=segment_roi,
             )
-            return segment_roi
+            candidate = {
+                "mouth_movement": 0.0,
+                "landmark_count": 0,
+                "frame_count": len(bounding_boxes),
+                "roi": segment_roi,
+                "selection_reason": "single_face",
+                "speaker_mapping_locked": len(speakers) == 1,
+            }
+            return {
+                "roi": segment_roi,
+                "crop_selection": self._build_crop_selection_metadata(
+                    candidate,
+                    frame_width,
+                ),
+                "roi_candidates": [candidate],
+            }
 
         # use kmeans to group the same bounding boxes together
         kmeans = KMeans(n_clusters=k, init="k-means++", n_init=2, random_state=0).fit(
@@ -840,40 +886,43 @@ class Resizer:
 
         roi_candidates = []
         for bounding_box_group in bounding_box_groups:
-            mouth_movement, roi = self._calc_mouth_movement(bounding_box_group, frames)
-            roi_candidates.append(
-                {
-                    "mouth_movement": mouth_movement,
-                    "frame_count": len(bounding_box_group),
-                    "roi": roi,
-                }
-            )
+            if not bounding_box_group:
+                continue
+            roi_candidates.append(self._calc_mouth_movement(bounding_box_group, frames))
+        if not roi_candidates:
+            raise ResizerError("No usable face groups detected in segment.")
 
-        segment_roi = self._select_segment_roi_candidate(
+        selected_candidate = self._select_segment_roi_candidate(
             roi_candidates=roi_candidates,
             speakers=speakers,
             speaker_face_centers=speaker_face_centers,
         )
 
-        return segment_roi
+        return {
+            "roi": selected_candidate["roi"],
+            "crop_selection": self._build_crop_selection_metadata(
+                selected_candidate,
+                frame_width,
+            ),
+            "roi_candidates": roi_candidates,
+        }
 
     def _select_segment_roi_candidate(
         self,
         roi_candidates: list[dict],
         speakers: list[int],
         speaker_face_centers: dict[int, float],
-    ) -> Rect:
+    ) -> dict:
         """
         Choose a face ROI using mouth movement first and speaker continuity second.
         """
-        max_mouth_movement = max(
-            candidate["mouth_movement"] for candidate in roi_candidates
-        )
-        if max_mouth_movement > 0:
+        if self._has_confident_mouth_movement_candidate(roi_candidates):
             selected_candidate = max(
                 roi_candidates,
                 key=lambda candidate: candidate["mouth_movement"],
             )
+            selected_candidate["selection_reason"] = "mouth_movement"
+            selected_candidate["speaker_mapping_locked"] = len(speakers) == 1
         else:
             logging.debug("No mouth movement detected for segment.")
             selected_candidate = self._select_no_mouth_movement_roi_candidate(
@@ -883,12 +932,45 @@ class Resizer:
             )
 
         selected_roi = selected_candidate["roi"]
-        self._remember_single_speaker_face(
-            speakers=speakers,
-            speaker_face_centers=speaker_face_centers,
-            roi=selected_roi,
+        if selected_candidate.get("speaker_mapping_locked") is True:
+            self._remember_single_speaker_face(
+                speakers=speakers,
+                speaker_face_centers=speaker_face_centers,
+                roi=selected_roi,
+            )
+        return selected_candidate
+
+    def _has_confident_mouth_movement_candidate(
+        self,
+        roi_candidates: list[dict],
+    ) -> bool:
+        """
+        Return whether the strongest mouth signal is reliable enough to use.
+        """
+        if not roi_candidates:
+            return False
+
+        ordered_candidates = sorted(
+            roi_candidates,
+            key=lambda candidate: candidate["mouth_movement"],
+            reverse=True,
         )
-        return selected_roi
+        strongest = ordered_candidates[0]
+        if strongest["landmark_count"] < MOUTH_MOVEMENT_MIN_LANDMARK_FRAMES:
+            return False
+        if strongest["mouth_movement"] < MOUTH_MOVEMENT_MIN_SCORE:
+            return False
+        if len(ordered_candidates) == 1:
+            return True
+
+        runner_up = ordered_candidates[1]
+        strongest_score = strongest["mouth_movement"]
+        runner_up_score = runner_up["mouth_movement"]
+        if runner_up_score <= 0:
+            return True
+        if strongest_score - runner_up_score >= MOUTH_MOVEMENT_MIN_DELTA:
+            return True
+        return strongest_score >= runner_up_score * MOUTH_MOVEMENT_MIN_RATIO
 
     def _select_no_mouth_movement_roi_candidate(
         self,
@@ -902,17 +984,20 @@ class Resizer:
         if len(speakers) == 1:
             speaker = int(speakers[0])
             if speaker in speaker_face_centers:
-                return min(
+                selected_candidate = min(
                     roi_candidates,
                     key=lambda candidate: abs(
                         self._roi_center_x(candidate["roi"])
                         - speaker_face_centers[speaker]
                     ),
                 )
+                selected_candidate["selection_reason"] = "speaker_continuity"
+                selected_candidate["speaker_mapping_locked"] = False
+                return selected_candidate
 
             if speaker_face_centers:
                 known_centers = list(speaker_face_centers.values())
-                return max(
+                selected_candidate = max(
                     roi_candidates,
                     key=lambda candidate: (
                         min(
@@ -922,8 +1007,17 @@ class Resizer:
                         candidate["frame_count"],
                     ),
                 )
+                selected_candidate["selection_reason"] = "fallback_unclaimed_face"
+                selected_candidate["speaker_mapping_locked"] = False
+                return selected_candidate
 
-        return max(roi_candidates, key=lambda candidate: candidate["frame_count"])
+        selected_candidate = max(
+            roi_candidates,
+            key=lambda candidate: candidate["frame_count"],
+        )
+        selected_candidate["selection_reason"] = "fallback_most_frames"
+        selected_candidate["speaker_mapping_locked"] = False
+        return selected_candidate
 
     def _remember_single_speaker_face(
         self,
@@ -944,11 +1038,158 @@ class Resizer:
         """
         return float(roi.x + roi.width / 2)
 
+    def _face_side(self, center_x: float, frame_width: int) -> str:
+        """
+        Return a readable horizontal face location label.
+        """
+        if center_x < frame_width * 0.45:
+            return "left"
+        if center_x > frame_width * 0.55:
+            return "right"
+        return "center"
+
+    def _build_crop_selection_metadata(
+        self,
+        candidate: dict,
+        frame_width: int,
+    ) -> dict:
+        """
+        Build JSON-safe evidence for the selected face crop.
+        """
+        center_x = self._roi_center_x(candidate["roi"])
+        return {
+            "reason": candidate.get("selection_reason", "unknown"),
+            "face_side": self._face_side(center_x, frame_width),
+            "face_center_x": round(center_x, 3),
+            "mouth_movement": round(float(candidate.get("mouth_movement", 0.0)), 6),
+            "landmark_count": int(candidate.get("landmark_count", 0)),
+            "face_sample_count": int(candidate.get("frame_count", 0)),
+            "speaker_mapping_locked": bool(
+                candidate.get("speaker_mapping_locked", False)
+            ),
+        }
+
+    def _reconcile_speaker_face_choices(
+        self,
+        segments: list[dict],
+        resize_width: int,
+        resize_height: int,
+        frame_width: int,
+    ) -> list[dict]:
+        """
+        Let strong mouth evidence correct earlier fallback-only speaker choices.
+        """
+        speaker_face_centers: dict[int, float] = {}
+        speaker_face_scores: dict[int, float] = {}
+
+        for segment in segments:
+            speakers = segment.get("speakers", [])
+            crop_selection = segment.get("crop_selection", {})
+            if len(speakers) != 1:
+                continue
+            if crop_selection.get("reason") not in ("mouth_movement", "single_face"):
+                continue
+            score = float(crop_selection.get("mouth_movement", 0.0)) + (
+                int(crop_selection.get("landmark_count", 0)) * 0.001
+            )
+            speaker = int(speakers[0])
+            if score >= speaker_face_scores.get(speaker, -1.0):
+                speaker_face_scores[speaker] = score
+                speaker_face_centers[speaker] = float(crop_selection["face_center_x"])
+
+        for segment in segments:
+            speakers = segment.get("speakers", [])
+            if len(speakers) != 1:
+                continue
+            speaker = int(speakers[0])
+            target_center = speaker_face_centers.get(speaker)
+            if target_center is None:
+                continue
+
+            crop_selection = segment.get("crop_selection", {})
+            if crop_selection.get("reason") in ("mouth_movement", "single_face"):
+                continue
+
+            candidates = segment.get("_roi_candidates", [])
+            if not candidates:
+                continue
+
+            selected_candidate = min(
+                candidates,
+                key=lambda candidate: abs(
+                    self._roi_center_x(candidate["roi"]) - target_center
+                ),
+            )
+            previous_reason = crop_selection.get("reason", "unknown")
+            previous_x = segment.get("x")
+            previous_y = segment.get("y")
+            selected_candidate["selection_reason"] = "reconciled_speaker_mapping"
+            selected_candidate["speaker_mapping_locked"] = True
+            roi = selected_candidate["roi"]
+            crop = self._calc_crop(roi, resize_width, resize_height)
+            segment["x"] = int(crop.x)
+            segment["y"] = int(crop.y)
+            segment["crop_selection"] = self._build_crop_selection_metadata(
+                selected_candidate,
+                frame_width,
+            )
+            segment["crop_selection"]["previous_reason"] = previous_reason
+            segment["crop_selection"]["previous_x"] = previous_x
+            segment["crop_selection"]["previous_y"] = previous_y
+            segment["crop_selection"]["matched_speaker"] = speaker
+
+        return segments
+
+    def _prepare_face_for_mouth_analysis(
+        self,
+        frame: np.ndarray,
+        bounding_box: np.ndarray,
+        margin_ratio: float = MOUTH_ANALYSIS_CROP_MARGIN_RATIO,
+        min_face_size_pixels: int = MOUTH_ANALYSIS_MIN_FACE_SIZE_PIXELS,
+    ) -> np.ndarray:
+        """
+        Expand and upscale a face crop before running mouth landmarks.
+        """
+        frame_height, frame_width = frame.shape[:2]
+        x1, y1, x2, y2 = [int(value) for value in bounding_box[:4]]
+        x1 = max(0, min(x1, frame_width - 1))
+        y1 = max(0, min(y1, frame_height - 1))
+        x2 = max(x1 + 1, min(x2, frame_width))
+        y2 = max(y1 + 1, min(y2, frame_height))
+
+        box_width = x2 - x1
+        box_height = y2 - y1
+        margin_x = int(box_width * margin_ratio)
+        margin_y = int(box_height * margin_ratio)
+        crop_x1 = max(0, x1 - margin_x)
+        crop_y1 = max(0, y1 - margin_y)
+        crop_x2 = min(frame_width, x2 + margin_x)
+        crop_y2 = min(frame_height, y2 + margin_y)
+
+        face = frame[crop_y1:crop_y2, crop_x1:crop_x2, :]
+        if face.size == 0:
+            return face
+
+        face_height, face_width = face.shape[:2]
+        largest_side = max(face_width, face_height)
+        if largest_side < min_face_size_pixels:
+            scale = min_face_size_pixels / largest_side
+            face = cv2.resize(
+                face,
+                (
+                    max(1, int(face_width * scale)),
+                    max(1, int(face_height * scale)),
+                ),
+                interpolation=cv2.INTER_CUBIC,
+            )
+
+        return np.ascontiguousarray(face)
+
     def _calc_mouth_movement(
         self,
         bounding_box_group: list[dict[np.ndarray, int]],
         frames: list[np.ndarray],
-    ) -> tuple[float, Rect]:
+    ) -> dict:
         """
         Calculates the mouth movement for a group of faces. These faces are assumed to
         all be the same person in different frames of the source video. Further, the
@@ -968,13 +1209,13 @@ class Resizer:
 
         Returns
         -------
-        float
-            The mouth movement of the faces across the frames.
+        dict
+            Mouth movement, landmark count, and averaged ROI for the face group.
         """
-        mouth_movement = 0
         roi = Rect(0, 0, 0, 0)
         prev_mar = None
-        mouth_movement = 0
+        mouth_movement = 0.0
+        landmark_count = 0
 
         for bounding_box_data in bounding_box_group:
             # roi
@@ -983,21 +1224,27 @@ class Resizer:
             # sum all roi's, average after loop
             roi += Rect(x1, y1, x2 - x1, y2 - y1)
             frame = frames[bounding_box_data["frame"]]
-            face = frame[y1:y2, x1:x2, :]
+            face = self._prepare_face_for_mouth_analysis(frame, box)
 
             # mouth movement
             mar = self._calc_mouth_aspect_ratio(face)
             if mar is None:
                 continue
+            landmark_count += 1
             if prev_mar is None:
                 prev_mar = mar
                 continue
             mouth_movement += abs(mar - prev_mar)
             prev_mar = mar
 
-        return mouth_movement, roi / len(bounding_box_group)
+        return {
+            "mouth_movement": float(mouth_movement),
+            "landmark_count": landmark_count,
+            "frame_count": len(bounding_box_group),
+            "roi": roi / len(bounding_box_group),
+        }
 
-    def _calc_mouth_aspect_ratio(self, face: np.ndarray) -> float:
+    def _calc_mouth_aspect_ratio(self, face: np.ndarray) -> float | None:
         """
         Calculate the mouth aspect ratio using dlib shape predictor.
 
@@ -1011,6 +1258,9 @@ class Resizer:
         mar: float
             The mouth aspect ratio.
         """
+        if face.size == 0:
+            return None
+
         landmarks = self._face_landmarker.detect(face)
         if landmarks is None:
             return None

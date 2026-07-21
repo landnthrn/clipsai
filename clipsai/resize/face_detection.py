@@ -474,7 +474,7 @@ class CommunityMediaPipeFaceLandmarker:
         """
         mp_image = self._mp.Image(
             image_format=self._mp.ImageFormat.SRGB,
-            data=face,
+            data=np.ascontiguousarray(face),
         )
         results = self._landmarker.detect(mp_image)
         if not results.face_landmarks:

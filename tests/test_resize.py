@@ -8,6 +8,7 @@ from clipsai.resize.rect import Rect
 
 
 # third party imports
+import numpy as np
 import pytest
 
 
@@ -304,6 +305,154 @@ def test_no_mouth_movement_prefers_unclaimed_face_for_new_speaker():
     )
 
     assert selected["roi"] == right_roi
+
+
+def test_prepare_face_for_mouth_analysis_adds_margin_and_upscales():
+    resizer = build_test_resizer()
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    face = resizer._prepare_face_for_mouth_analysis(
+        frame=frame,
+        bounding_box=np.array([40, 40, 50, 50]),
+        margin_ratio=0.5,
+        min_face_size_pixels=64,
+    )
+
+    assert face.shape[:2] == (64, 64)
+    assert face.flags["C_CONTIGUOUS"] is True
+
+
+def test_mouth_evidence_locks_speaker_face_mapping():
+    resizer = build_test_resizer()
+    left_roi = Rect(300, 100, 100, 100)
+    right_roi = Rect(1000, 100, 100, 100)
+    speaker_face_centers = {}
+
+    selected = resizer._select_segment_roi_candidate(
+        roi_candidates=[
+            {
+                "roi": left_roi,
+                "frame_count": 8,
+                "mouth_movement": 0.05,
+                "landmark_count": 4,
+            },
+            {
+                "roi": right_roi,
+                "frame_count": 8,
+                "mouth_movement": 0.01,
+                "landmark_count": 4,
+            },
+        ],
+        speakers=[1],
+        speaker_face_centers=speaker_face_centers,
+    )
+
+    assert selected["roi"] == left_roi
+    assert selected["selection_reason"] == "mouth_movement"
+    assert selected["speaker_mapping_locked"] is True
+    assert speaker_face_centers[1] == 350
+
+
+def test_fallback_only_selection_does_not_lock_speaker_face_mapping():
+    resizer = build_test_resizer()
+    left_roi = Rect(300, 100, 100, 100)
+    right_roi = Rect(1000, 100, 100, 100)
+    speaker_face_centers = {}
+
+    selected = resizer._select_segment_roi_candidate(
+        roi_candidates=[
+            {
+                "roi": left_roi,
+                "frame_count": 8,
+                "mouth_movement": 0,
+                "landmark_count": 0,
+            },
+            {
+                "roi": right_roi,
+                "frame_count": 4,
+                "mouth_movement": 0,
+                "landmark_count": 0,
+            },
+        ],
+        speakers=[1],
+        speaker_face_centers=speaker_face_centers,
+    )
+
+    assert selected["roi"] == left_roi
+    assert selected["selection_reason"] == "fallback_most_frames"
+    assert selected["speaker_mapping_locked"] is False
+    assert speaker_face_centers == {}
+
+
+def test_reconcile_speaker_face_choices_corrects_earlier_fallback_segment():
+    resizer = build_test_resizer()
+    left_roi = Rect(300, 100, 100, 100)
+    right_roi = Rect(1000, 100, 100, 100)
+    left_crop = resizer._calc_crop(left_roi, resize_width=600, resize_height=1080)
+    right_crop = resizer._calc_crop(right_roi, resize_width=600, resize_height=1080)
+    segments = [
+        {
+            "speakers": [1],
+            "x": int(left_crop.x),
+            "y": int(left_crop.y),
+            "crop_selection": {
+                "reason": "fallback_most_frames",
+                "face_center_x": 350,
+            },
+            "_roi_candidates": [
+                {
+                    "roi": left_roi,
+                    "frame_count": 8,
+                    "mouth_movement": 0,
+                    "landmark_count": 0,
+                },
+                {
+                    "roi": right_roi,
+                    "frame_count": 4,
+                    "mouth_movement": 0,
+                    "landmark_count": 0,
+                },
+            ],
+        },
+        {
+            "speakers": [0],
+            "x": int(left_crop.x),
+            "y": int(left_crop.y),
+            "crop_selection": {
+                "reason": "mouth_movement",
+                "face_center_x": 350,
+                "mouth_movement": 0.12,
+                "landmark_count": 5,
+            },
+            "_roi_candidates": [],
+        },
+        {
+            "speakers": [1],
+            "x": int(right_crop.x),
+            "y": int(right_crop.y),
+            "crop_selection": {
+                "reason": "mouth_movement",
+                "face_center_x": 1050,
+                "mouth_movement": 0.07,
+                "landmark_count": 5,
+            },
+            "_roi_candidates": [],
+        },
+    ]
+
+    reconciled = resizer._reconcile_speaker_face_choices(
+        segments=segments,
+        resize_width=600,
+        resize_height=1080,
+        frame_width=1920,
+    )
+
+    assert reconciled[0]["x"] == int(right_crop.x)
+    assert reconciled[0]["crop_selection"]["reason"] == "reconciled_speaker_mapping"
+    assert reconciled[0]["crop_selection"]["previous_reason"] == "fallback_most_frames"
+    assert reconciled[0]["crop_selection"]["matched_speaker"] == 1
+    assert reconciled[1]["x"] == int(left_crop.x)
+    assert reconciled[1]["crop_selection"]["reason"] == "mouth_movement"
 
 
 @pytest.mark.parametrize(

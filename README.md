@@ -151,6 +151,7 @@ Each plan now stores:
 - segment IDs for easier manual reference
 - an `enabled` switch per segment so you can skip sections without deleting them
 - a `notes` field per segment
+- crop-selection evidence such as selected face side, mouth movement, landmark count, and selection reason
 - analysis settings such as diarization model, optional speaker-count constraints, face-detection backend choice, and optional raw diarization save path
 - render settings such as preset/custom mode, naming mode, suffix, size, overwrite behavior, and optional summary/logs export
 
@@ -225,6 +226,15 @@ Example plan segment:
   "end_time": 8.2,
   "x": 420,
   "y": 0,
+  "crop_selection": {
+    "reason": "mouth_movement",
+    "face_side": "left",
+    "face_center_x": 723.5,
+    "mouth_movement": 0.082451,
+    "landmark_count": 7,
+    "face_sample_count": 12,
+    "speaker_mapping_locked": true
+  },
   "notes": ""
 }
 ```
@@ -258,7 +268,7 @@ The summary markdown includes:
 - the analysis settings used
 - the render settings used
 - the enabled versus disabled segment summary
-- an exact per-cut timeline with decimal start, end, and duration values
+- an exact per-cut timeline with decimal start, end, duration, crop reason, face side, mouth movement, and landmark-frame values
 
 The analyze step can also save raw pyannote diarization JSON under `plans/raw-diarization/` when `--save-raw-diarization` is enabled.
 

@@ -24,6 +24,7 @@ class Segment:
         end_time: float,
         x: int,
         y: int,
+        crop_selection: dict | None = None,
     ) -> None:
         """
         Initializes a CropSegment instance.
@@ -46,6 +47,7 @@ class Segment:
         self._end_time = end_time
         self._x = x
         self._y = y
+        self._crop_selection = crop_selection
 
     @property
     def speakers(self) -> list[int]:
@@ -83,6 +85,13 @@ class Segment:
         """
         return self._y
 
+    @property
+    def crop_selection(self) -> dict | None:
+        """
+        Optional analysis evidence explaining why this crop was selected.
+        """
+        return self._crop_selection
+
     def copy(self) -> "Segment":
         """
         Returns a copy of the Segment instance.
@@ -93,19 +102,27 @@ class Segment:
             end_time=self._end_time,
             x=self._x,
             y=self._y,
+            crop_selection=(
+                None
+                if self._crop_selection is None
+                else dict(self._crop_selection)
+            ),
         )
 
     def to_dict(self) -> dict:
         """
         Returns a dictionary representation of the Segment instance.
         """
-        return {
+        segment_data = {
             "speakers": self._speakers,
             "start_time": self._start_time,
             "end_time": self._end_time,
             "x": self._x,
             "y": self._y,
         }
+        if self._crop_selection is not None:
+            segment_data["crop_selection"] = self._crop_selection
+        return segment_data
 
     def __str__(self) -> str:
         """
@@ -139,6 +156,7 @@ class Segment:
             and self._end_time == __value.end_time
             and self._x == __value.x
             and self._y == __value.y
+            and self._crop_selection == __value.crop_selection
         )
 
     def __ne__(self, __value: object) -> bool:
