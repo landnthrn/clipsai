@@ -1177,6 +1177,19 @@ class Resizer:
 
         return segments
 
+    def _crop_face_for_mouth_analysis(
+        self,
+        frame: np.ndarray,
+        bounding_box: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Crop one face before mouth-landmark analysis.
+        """
+        if self._uses_legacy_crop_brain():
+            x1, y1, x2, y2 = [int(value) for value in bounding_box[:4]]
+            return frame[y1:y2, x1:x2, :]
+        return self._prepare_face_for_mouth_analysis(frame, bounding_box)
+
     def _prepare_face_for_mouth_analysis(
         self,
         frame: np.ndarray,
@@ -1261,7 +1274,7 @@ class Resizer:
             # sum all roi's, average after loop
             roi += Rect(x1, y1, x2 - x1, y2 - y1)
             frame = frames[bounding_box_data["frame"]]
-            face = self._prepare_face_for_mouth_analysis(frame, box)
+            face = self._crop_face_for_mouth_analysis(frame, box)
 
             # mouth movement
             mar = self._calc_mouth_aspect_ratio(face)

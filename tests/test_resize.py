@@ -308,7 +308,7 @@ def test_no_mouth_movement_prefers_unclaimed_face_for_new_speaker():
 
 
 def test_prepare_face_for_mouth_analysis_adds_margin_and_upscales():
-    resizer = build_test_resizer()
+    resizer = build_test_resizer(diarization_model="community-1")
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
 
     face = resizer._prepare_face_for_mouth_analysis(
@@ -320,6 +320,48 @@ def test_prepare_face_for_mouth_analysis_adds_margin_and_upscales():
 
     assert face.shape[:2] == (64, 64)
     assert face.flags["C_CONTIGUOUS"] is True
+
+
+def test_legacy_mouth_analysis_uses_raw_face_crop():
+    resizer = build_test_resizer(diarization_model="legacy-3.1")
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    captured_shapes = []
+
+    def capture_face(face):
+        captured_shapes.append(face.shape[:2])
+        return None
+
+    resizer._calc_mouth_aspect_ratio = capture_face
+    resizer._calc_mouth_movement(
+        bounding_box_group=[
+            {"bounding_box": np.array([40, 40, 50, 50]), "frame": 0},
+        ],
+        frames=[frame],
+    )
+
+    assert captured_shapes == [(10, 10)]
+
+
+def test_community_mouth_analysis_still_pads_and_upscales():
+    resizer = build_test_resizer(diarization_model="community-1")
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    captured_shapes = []
+
+    def capture_face(face):
+        captured_shapes.append(face.shape[:2])
+        return None
+
+    resizer._calc_mouth_aspect_ratio = capture_face
+    resizer._calc_mouth_movement(
+        bounding_box_group=[
+            {"bounding_box": np.array([40, 40, 50, 50]), "frame": 0},
+        ],
+        frames=[frame],
+    )
+
+    assert len(captured_shapes) == 1
+    assert captured_shapes[0][0] >= 256
+    assert captured_shapes[0][1] >= 256
 
 
 def test_mouth_evidence_locks_speaker_face_mapping():
