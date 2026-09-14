@@ -116,6 +116,7 @@ class Resizer:
             diarization_model=diarization_model
         )
         self._media_editor = MediaEditor()
+        self._diarization_model = diarization_model
 
     def resize(
         self,
@@ -660,12 +661,13 @@ class Resizer:
                 face_detect_width=face_detect_width,
                 speaker_face_centers=speaker_face_centers,
             )
-        segments_with_xy_coords = self._reconcile_speaker_face_choices(
-            segments=segments_with_xy_coords,
-            resize_width=resize_width,
-            resize_height=resize_height,
-            frame_width=video_file.get_width_pixels(),
-        )
+        if not self._uses_legacy_crop_brain():
+            segments_with_xy_coords = self._reconcile_speaker_face_choices(
+                segments=segments_with_xy_coords,
+                resize_width=resize_width,
+                resize_height=resize_height,
+                frame_width=video_file.get_width_pixels(),
+            )
         for segment in segments_with_xy_coords:
             segment.pop("_roi_candidates", None)
         return segments_with_xy_coords
@@ -844,18 +846,21 @@ class Resizer:
             box = np.mean(bounding_boxes, axis=0).astype(np.int16)
             x1, y1, x2, y2 = box
             segment_roi = Rect(x1, y1, x2 - x1, y2 - y1)
-            self._remember_single_speaker_face(
-                speakers=speakers,
-                speaker_face_centers=speaker_face_centers,
-                roi=segment_roi,
-            )
+            if not self._uses_legacy_crop_brain():
+                self._remember_single_speaker_face(
+                    speakers=speakers,
+                    speaker_face_centers=speaker_face_centers,
+                    roi=segment_roi,
+                )
             candidate = {
                 "mouth_movement": 0.0,
                 "landmark_count": 0,
                 "frame_count": len(bounding_boxes),
                 "roi": segment_roi,
                 "selection_reason": "single_face",
-                "speaker_mapping_locked": len(speakers) == 1,
+                "speaker_mapping_locked": (
+                    not self._uses_legacy_crop_brain() and len(speakers) == 1
+                ),
             }
             return {
                 "roi": segment_roi,
@@ -907,6 +912,35 @@ class Resizer:
             "roi_candidates": roi_candidates,
         }
 
+    def _uses_legacy_crop_brain(self) -> bool:
+        """
+        Return whether this resize run should use the original crop-choice rules.
+        """
+        return self._diarization_model == DEFAULT_DIARIZATION_MODEL
+
+    def _select_legacy_segment_roi_candidate(
+        self,
+        roi_candidates: list[dict],
+    ) -> dict:
+        """
+        Choose a face ROI using the original mouth-movement, then most-frames, rules.
+        """
+        selected_candidate = max(
+            roi_candidates,
+            key=lambda candidate: candidate["mouth_movement"],
+        )
+        if selected_candidate["mouth_movement"] > 0:
+            selected_candidate["selection_reason"] = "mouth_movement"
+        else:
+            logging.debug("No mouth movement detected for segment.")
+            selected_candidate = max(
+                roi_candidates,
+                key=lambda candidate: candidate["frame_count"],
+            )
+            selected_candidate["selection_reason"] = "most_frames"
+        selected_candidate["speaker_mapping_locked"] = False
+        return selected_candidate
+
     def _select_segment_roi_candidate(
         self,
         roi_candidates: list[dict],
@@ -916,6 +950,9 @@ class Resizer:
         """
         Choose a face ROI using mouth movement first and speaker continuity second.
         """
+        if self._uses_legacy_crop_brain():
+            return self._select_legacy_segment_roi_candidate(roi_candidates)
+
         if self._has_confident_mouth_movement_candidate(roi_candidates):
             selected_candidate = max(
                 roi_candidates,
@@ -1338,12 +1375,13 @@ class Resizer:
         video_height = video_file.get_height_pixels()
 
         for _ in range(len(segments) - 1):
-            cur_speakers = segments[idx].get("speakers")
-            next_speakers = segments[idx + 1].get("speakers")
-            if cur_speakers is not None and next_speakers is not None:
-                if cur_speakers != next_speakers:
-                    idx += 1
-                    continue
+            if not self._uses_legacy_crop_brain():
+                cur_speakers = segments[idx].get("speakers")
+                next_speakers = segments[idx + 1].get("speakers")
+                if cur_speakers is not None and next_speakers is not None:
+                    if cur_speakers != next_speakers:
+                        idx += 1
+                        continue
 
             cur_x = segments[idx]["x"]
             next_x = segments[idx + 1]["x"]

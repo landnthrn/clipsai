@@ -274,7 +274,7 @@ def test_calc_n_batches_treats_mediapipe_as_cpu_side_detection():
 
 
 def test_no_mouth_movement_prefers_known_face_for_same_speaker():
-    resizer = build_test_resizer()
+    resizer = build_test_resizer(diarization_model="community-1")
     left_roi = Rect(300, 100, 100, 100)
     right_roi = Rect(1000, 100, 100, 100)
 
@@ -291,7 +291,7 @@ def test_no_mouth_movement_prefers_known_face_for_same_speaker():
 
 
 def test_no_mouth_movement_prefers_unclaimed_face_for_new_speaker():
-    resizer = build_test_resizer()
+    resizer = build_test_resizer(diarization_model="community-1")
     left_roi = Rect(300, 100, 100, 100)
     right_roi = Rect(1000, 100, 100, 100)
 
@@ -323,7 +323,7 @@ def test_prepare_face_for_mouth_analysis_adds_margin_and_upscales():
 
 
 def test_mouth_evidence_locks_speaker_face_mapping():
-    resizer = build_test_resizer()
+    resizer = build_test_resizer(diarization_model="community-1")
     left_roi = Rect(300, 100, 100, 100)
     right_roi = Rect(1000, 100, 100, 100)
     speaker_face_centers = {}
@@ -354,7 +354,7 @@ def test_mouth_evidence_locks_speaker_face_mapping():
 
 
 def test_fallback_only_selection_does_not_lock_speaker_face_mapping():
-    resizer = build_test_resizer()
+    resizer = build_test_resizer(diarization_model="community-1")
     left_roi = Rect(300, 100, 100, 100)
     right_roi = Rect(1000, 100, 100, 100)
     speaker_face_centers = {}
@@ -385,7 +385,7 @@ def test_fallback_only_selection_does_not_lock_speaker_face_mapping():
 
 
 def test_reconcile_speaker_face_choices_corrects_earlier_fallback_segment():
-    resizer = build_test_resizer()
+    resizer = build_test_resizer(diarization_model="community-1")
     left_roi = Rect(300, 100, 100, 100)
     right_roi = Rect(1000, 100, 100, 100)
     left_crop = resizer._calc_crop(left_roi, resize_width=600, resize_height=1080)
@@ -554,7 +554,86 @@ def test_merge_identical_segments_preserves_different_speakers():
         {"speakers": [0], "x": 101, "y": 0, "start_time": 10, "end_time": 20},
     ]
 
-    resizer = build_test_resizer()
+    resizer = build_test_resizer(diarization_model="community-1")
     merged_segments = resizer._merge_identical_segments(segments, mock_video_file)
 
     assert merged_segments == segments
+
+
+def test_legacy_crop_choice_prefers_highest_mouth_movement():
+    resizer = build_test_resizer(diarization_model="legacy-3.1")
+    left_roi = Rect(300, 100, 100, 100)
+    right_roi = Rect(1000, 100, 100, 100)
+    speaker_face_centers = {1: 350}
+
+    selected = resizer._select_segment_roi_candidate(
+        roi_candidates=[
+            {
+                "roi": left_roi,
+                "frame_count": 20,
+                "mouth_movement": 0.011,
+                "landmark_count": 4,
+            },
+            {
+                "roi": right_roi,
+                "frame_count": 4,
+                "mouth_movement": 0.012,
+                "landmark_count": 4,
+            },
+        ],
+        speakers=[1],
+        speaker_face_centers=speaker_face_centers,
+    )
+
+    assert selected["roi"] == right_roi
+    assert selected["selection_reason"] == "mouth_movement"
+    assert selected["speaker_mapping_locked"] is False
+    assert speaker_face_centers == {1: 350}
+
+
+def test_legacy_zero_mouth_movement_uses_most_frames_not_speaker_memory():
+    resizer = build_test_resizer(diarization_model="legacy-3.1")
+    left_roi = Rect(300, 100, 100, 100)
+    right_roi = Rect(1000, 100, 100, 100)
+    speaker_face_centers = {1: 350}
+
+    selected = resizer._select_segment_roi_candidate(
+        roi_candidates=[
+            {
+                "roi": right_roi,
+                "frame_count": 20,
+                "mouth_movement": 0,
+                "landmark_count": 0,
+            },
+            {
+                "roi": left_roi,
+                "frame_count": 4,
+                "mouth_movement": 0,
+                "landmark_count": 0,
+            },
+        ],
+        speakers=[1],
+        speaker_face_centers=speaker_face_centers,
+    )
+
+    assert selected["roi"] == right_roi
+    assert selected["selection_reason"] == "most_frames"
+    assert selected["speaker_mapping_locked"] is False
+    assert speaker_face_centers == {1: 350}
+
+
+def test_legacy_merges_nearby_crops_even_when_speaker_ids_differ():
+    mock_video_file = MagicMock(spec=VideoFile)
+    mock_video_file.get_width_pixels.return_value = 1000
+    mock_video_file.get_height_pixels.return_value = 1000
+    segments = [
+        {"speakers": [1], "x": 100, "y": 0, "start_time": 0, "end_time": 10},
+        {"speakers": [0], "x": 101, "y": 0, "start_time": 10, "end_time": 20},
+    ]
+
+    resizer = build_test_resizer(diarization_model="legacy-3.1")
+    merged_segments = resizer._merge_identical_segments(segments, mock_video_file)
+
+    assert merged_segments == [
+        {"speakers": [1], "x": 100, "y": 0, "start_time": 0, "end_time": 20},
+    ]
